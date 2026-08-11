@@ -1,0 +1,14 @@
+MAIN_SITE:
+https://www.gsmarena.com
+
+SITES:
+https://priceoye.pk/mobiles/
+https://www.whatmobile.com.pk/
+https://www.daraz.pk/
+https://www.mega.pk/mobiles_products/
+https://qeemat.com.pk/
+https://asaanprice.com/
+https://qmart.pk/
+https://wisemarket.com.pk/collection/mobiles/
+https://www.urdupoint.com/mobile/
+https://phonebolee.com/

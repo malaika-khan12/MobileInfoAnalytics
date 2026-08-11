@@ -6,9 +6,15 @@ https://priceoye.pk/mobiles/
 https://www.whatmobile.com.pk/
 https://www.daraz.pk/
 https://www.mega.pk/mobiles_products/
+https://www.olx.com.pk/
+https://mymobile.pk/
+https://www.whatamobile.com.pk/
+
+UNAUTHORIZED_SITES:
 https://qeemat.com.pk/
 https://asaanprice.com/
 https://qmart.pk/
 https://wisemarket.com.pk/collection/mobiles/
 https://www.urdupoint.com/mobile/
 https://phonebolee.com/
+https://whatmobilepriceoye.com/

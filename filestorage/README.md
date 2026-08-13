@@ -15,16 +15,12 @@ with a colon and is followed by one URL per line:
 MAIN_SITE:
 https://www.gsmarena.com
 SITES:
-https://priceoye.pk/mobiles/
 https://www.whatmobile.com.pk/
 https://www.daraz.pk/
-https://www.mega.pk/mobiles_products/
-https://www.olx.com.pk/
-https://mymobile.pk/
-https://www.whatamobile.com.pk/
+...
 UNAUTHORIZED_SITES:
 https://qeemat.com.pk/
-https://asaanprice.com/
+...
 ```
 
 | Section | Behavior |

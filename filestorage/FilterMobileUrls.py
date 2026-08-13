@@ -5,10 +5,14 @@ Build the mobile-URL manifests consumed by site navigators.
 
 The generic strategy preserves the original keyword-based behaviour for sites
 whose mobile catalogue lives below a path such as ``/mobiles``.  GSMArena is
-different: its phone specification pages live directly at the site root and
-usually do not contain the word "mobile".  In automatic mode this script
-therefore applies a GSMArena-specific product-page rule and writes every
-matching phone specification URL to ``sitemap_mobile/gsmarena.com.json``.
+different: its phone specification pages and maker catalogues both live at the
+site root.  In automatic mode this script therefore creates a two-level
+GSMArena navigation manifest:
+
+* ``tree`` / ``catalog_urls`` contain canonical maker landing pages such as
+  ``xiaomi-phones-80.php``.  These are the pages a browser navigator opens.
+* ``mobile_urls`` contains every directly known specification page as a
+  coverage audit and fallback crawl source.
 
 The sitemap constructor is intentionally not involved here; this script only
 reads the JSON trees it has already produced.
@@ -60,6 +64,11 @@ GSMARENA_PRODUCT_FILE_RE = re.compile(
 )
 GSMARENA_NON_PRODUCT_MARKER_RE = re.compile(
     r"-(?:phones?|reviews?|pictures?|opinions?|prices?|videos?|related|compare|news)-",
+    re.IGNORECASE,
+)
+GSMARENA_CATALOG_FILE_RE = re.compile(
+    r"^(?P<maker_slug>[a-z0-9][a-z0-9_()+.,%'-]*)-phones-"
+    r"(?P<maker_id>[0-9]+)\.php$",
     re.IGNORECASE,
 )
 
@@ -183,6 +192,19 @@ def gsmarena_product_match(url: str) -> Optional[re.Match[str]]:
     return match
 
 
+def gsmarena_catalog_match(url: str) -> Optional[re.Match[str]]:
+    """Match one canonical GSMArena maker landing page.
+
+    Paginated/filter variants such as ``xiaomi-phones-f-80-0-p2.php`` are
+    deliberately excluded.  The navigator discovers those from the canonical
+    maker page, which keeps the stored navigation tree small and stable.
+    """
+    parsed = urlparse(url)
+    if canonical_site(url) != "gsmarena.com" or parsed.query or parsed.fragment:
+        return None
+    return GSMARENA_CATALOG_FILE_RE.fullmatch(unquote(Path(parsed.path).name))
+
+
 def extract_gsmarena_products(tree: dict) -> List[dict]:
     """Extract and de-duplicate GSMArena specification-page URLs."""
     products: List[dict] = []
@@ -206,6 +228,55 @@ def extract_gsmarena_products(tree: dict) -> List[dict]:
         )
 
     return products
+
+
+def extract_gsmarena_catalogs(tree: dict) -> List[dict]:
+    """Extract canonical maker pages used as browser landing points."""
+    catalogs: List[dict] = []
+    seen: set[str] = set()
+
+    for node in walk_nodes(tree):
+        url = node.get("url")
+        if not isinstance(url, str) or url in seen:
+            continue
+        match = gsmarena_catalog_match(url)
+        if match is None:
+            continue
+        seen.add(url)
+        catalogs.append(
+            {
+                "name": match.group("maker_slug").replace("_", " "),
+                "maker_slug": match.group("maker_slug"),
+                "maker_id": int(match.group("maker_id")),
+                "path": node.get("path") or urlparse(url).path,
+                "url": url,
+                "children": [],
+                "matched_by": "gsmarena_maker_catalog_pattern",
+            }
+        )
+
+    return catalogs
+
+
+def build_gsmarena_catalog_tree(base_url: str, catalogs: Sequence[dict]) -> dict:
+    """Create the filtered sitemap tree consumed by catalog navigation."""
+    root_url = domain_root(base_url) + "/makers.php3"
+    return {
+        "name": "gsmarena.com maker catalogs",
+        "path": "/makers.php3",
+        "url": root_url,
+        "children": [
+            {
+                "name": entry["name"],
+                "maker_slug": entry["maker_slug"],
+                "maker_id": entry["maker_id"],
+                "path": entry["path"],
+                "url": entry["url"],
+                "children": [],
+            }
+            for entry in catalogs
+        ],
+    }
 
 
 def keyword_result(
@@ -238,14 +309,19 @@ def keyword_result(
 
 
 def gsmarena_result(data: dict) -> dict:
+    catalogs = extract_gsmarena_catalogs(data["tree"])
     products = extract_gsmarena_products(data["tree"])
+    base_url = data.get("base_url", "https://www.gsmarena.com")
     return {
         "site": data.get("site", "gsmarena.com"),
-        "base_url": data.get("base_url", "https://www.gsmarena.com"),
+        "base_url": base_url,
         "source_url_count": data.get("url_count"),
-        "mode": "products",
-        "strategy": "gsmarena_product_pages",
+        "mode": "catalog_tree",
+        "strategy": "gsmarena_catalog_and_product_pages",
+        "catalog_count": len(catalogs),
         "match_count": len(products),
+        "tree": build_gsmarena_catalog_tree(base_url, catalogs),
+        "catalog_urls": catalogs,
         "mobile_urls": products,
     }
 
@@ -276,9 +352,9 @@ def filter_site_file(
     site = canonical_site(str(data.get("site") or path.stem))
     resolved_strategy = strategy
     if strategy == "auto":
-        resolved_strategy = "gsmarena-products" if site == "gsmarena.com" else "keyword"
+        resolved_strategy = "gsmarena-catalog" if site == "gsmarena.com" else "keyword"
 
-    if resolved_strategy == "gsmarena-products":
+    if resolved_strategy in {"gsmarena-catalog", "gsmarena-products"}:
         if site != "gsmarena.com":
             log.error("GSMArena product strategy cannot process site %s", site)
             return None
@@ -332,9 +408,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--strategy",
-        choices=["auto", "keyword", "gsmarena-products"],
+        choices=["auto", "keyword", "gsmarena-catalog", "gsmarena-products"],
         default="auto",
-        help="'auto' selects the GSMArena product rule only for gsmarena.com.",
+        help="'auto' creates a maker-catalog tree plus product fallback for GSMArena.",
     )
     parser.add_argument(
         "--keywords",
@@ -345,7 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["base", "all"],
         default="base",
-        help="Generic keyword mode; GSMArena product mode ignores this option.",
+        help="Generic keyword mode; the GSMArena combined strategy ignores it.",
     )
     parser.add_argument(
         "--sample",
@@ -391,15 +467,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         successful_files += 1
         total_matches += result["match_count"]
-        log.info(
-            "%s: strategy=%s, matched=%d of source=%s",
-            path.name,
-            result["strategy"],
-            result["match_count"],
-            result.get("source_url_count"),
-        )
-        for entry in result["mobile_urls"][: args.sample]:
-            log.info("    %s", entry["url"])
+        if result.get("strategy") == "gsmarena_catalog_and_product_pages":
+            log.info(
+                "%s: strategy=%s, catalogs=%d, products=%d of source=%s",
+                path.name,
+                result["strategy"],
+                result["catalog_count"],
+                result["match_count"],
+                result.get("source_url_count"),
+            )
+            log.info("    Catalog landing-page sample:")
+            for entry in result["catalog_urls"][: args.sample]:
+                log.info("      %s", entry["url"])
+            log.info("    Direct product fallback sample:")
+            for entry in result["mobile_urls"][: args.sample]:
+                log.info("      %s", entry["url"])
+        else:
+            log.info(
+                "%s: strategy=%s, matched=%d of source=%s",
+                path.name,
+                result["strategy"],
+                result["match_count"],
+                result.get("source_url_count"),
+            )
+            for entry in result["mobile_urls"][: args.sample]:
+                log.info("    %s", entry["url"])
 
         if not args.dry_run:
             out_path = output_dir / path.name

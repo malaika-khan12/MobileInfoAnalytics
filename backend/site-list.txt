@@ -8,6 +8,13 @@ https://www.daraz.pk/catalog/?spm=a2a0e.searchlist.cate_5.5.5b1427f2IwB4l7&q=Sma
 https://www.mega.pk/mobiles/
 https://mymobile.pk/
 https://www.whatamobile.com.pk/
+https://qeemat.com.pk/cl/smartphones
+https://asaanprice.com/
+https://qmart.pk/mobile-phones/
+https://wisemarket.com.pk/collection/mobiles/
+https://www.urdupoint.com/mobile/brands.html
+https://phonebolee.com/
+https://whatmobilepriceoye.com/
 
 UNAUTHORIZED_SITES:
 https://qeemat.com.pk/cl/smartphones

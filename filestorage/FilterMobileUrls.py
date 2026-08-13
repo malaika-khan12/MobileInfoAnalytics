@@ -1,39 +1,31 @@
 """
 FilterMobileUrls.py
 
-Reads the site-tree JSON files produced by treeConstructor.py
-(filestorage/sitemap/<site>.json, shape: {site, base_url, url_count, tree})
-and filters each tree down to just the branches that are about mobile
-phones -- e.g. a path segment like "mobiles", "mobile_products",
-"mobile-phones", etc.
+Build the mobile-URL manifests consumed by site navigators.
 
-Rather than dumping every individual product URL under a matched branch
-(which is what you said you don't want -- a single mobile section can
-contain thousands of product pages), this walks each tree top-down and
-stops at the FIRST node along a path whose path/url matches the keyword
-regex. That node's URL is the "base URL" for that mobile section. It
-does not descend further into that branch, since everything under a
-matched node is already part of the mobile section.
+The generic strategy preserves the original keyword-based behaviour for sites
+whose mobile catalogue lives below a path such as ``/mobiles``.  GSMArena is
+different: its phone specification pages live directly at the site root and
+usually do not contain the word "mobile".  In automatic mode this script
+therefore applies a GSMArena-specific product-page rule and writes every
+matching phone specification URL to ``sitemap_mobile/gsmarena.com.json``.
 
-Example: given a tree containing
-    /electronics/laptops/...
-    /mobiles/samsung/galaxy-s24
-    /mobiles/apple/iphone-15
-    /garments/mens/...
-this produces one base URL: https://site.com/mobiles/
-(it does NOT also list /mobiles/samsung/ and /mobiles/samsung/galaxy-s24
-separately -- those are nested under the already-matched /mobiles/ node).
+The sitemap constructor is intentionally not involved here; this script only
+reads the JSON trees it has already produced.
 
-If a matching path segment was never itself a standalone page in the
-sitemap (node.url is None -- only its children had actual URLs), the
-base URL is constructed from base_url + path and flagged
-"url_is_inferred": true so you know it's a guess, not a confirmed page.
+Examples (run from the repository root):
 
-Usage:
-    python FilterMobileUrls.py
-    python FilterMobileUrls.py --input-dir filestorage/sitemap --output-dir filestorage/sitemap_mobile
-    python FilterMobileUrls.py --keywords mobile,smartphone,cell-phone
-    python FilterMobileUrls.py --mode all   # list every matching URL instead of just branch bases
+    # Recommended: rebuild only the GSMArena manifest.
+    python filestorage/FilterMobileUrls.py --site gsmarena.com
+
+    # Preview counts and sample matches without writing anything.
+    python filestorage/FilterMobileUrls.py --site gsmarena.com --dry-run
+
+    # Preserve the original generic behaviour for all other sites.
+    python filestorage/FilterMobileUrls.py
+
+    # Force keyword matching even for GSMArena (normally not useful).
+    python filestorage/FilterMobileUrls.py --site gsmarena.com --strategy keyword
 """
 
 from __future__ import annotations
@@ -44,8 +36,8 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from typing import Iterable, Iterator, List, Optional, Sequence
+from urllib.parse import unquote, urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,89 +48,103 @@ log = logging.getLogger("FilterMobileUrls")
 
 DEFAULT_INPUT_DIR = "filestorage/sitemap"
 DEFAULT_OUTPUT_DIR = "filestorage/sitemap_mobile"
-DEFAULT_KEYWORDS = ["mobile"]  # substring match already covers "mobiles",
-                                 # "mobile_products", "mobile-phones", etc.
+DEFAULT_KEYWORDS = ["mobile"]
+
+# A GSMArena product page has a brand/model slug and a numeric phone id, for
+# example ``xiaomi_redmi_note_14_4g_(global)-13616.php``.  Requiring an
+# underscore separates product pages from most maker/listing pages; the deny
+# markers below remove the remaining known non-spec page families.
+GSMARENA_PRODUCT_FILE_RE = re.compile(
+    r"^(?P<slug>[a-z0-9][a-z0-9_()+.,%'-]*)-(?P<product_id>[0-9]+)\.php$",
+    re.IGNORECASE,
+)
+GSMARENA_NON_PRODUCT_MARKER_RE = re.compile(
+    r"-(?:phones?|reviews?|pictures?|opinions?|prices?|videos?|related|compare|news)-",
+    re.IGNORECASE,
+)
 
 
-def build_keyword_pattern(keywords: List[str]) -> re.Pattern:
-    escaped = [re.escape(k.strip()) for k in keywords if k.strip()]
+def build_keyword_pattern(keywords: Sequence[str]) -> re.Pattern[str]:
+    escaped = [re.escape(keyword.strip()) for keyword in keywords if keyword.strip()]
     if not escaped:
         raise ValueError("At least one keyword is required")
-    pattern = "|".join(escaped)
-    return re.compile(pattern, re.IGNORECASE)
+    return re.compile("|".join(escaped), re.IGNORECASE)
+
+
+def canonical_site(value: str) -> str:
+    """Normalize a filename/domain/base URL to a comparable site name."""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    host = parsed.netloc.lower().split("@")[-1].split(":")[0]
+    return re.sub(r"^www\.", "", host)
+
+
+def walk_nodes(node: dict) -> Iterator[dict]:
+    """Yield a tree node and all descendants without recursion limits."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if not isinstance(current, dict):
+            continue
+        yield current
+        children = current.get("children", [])
+        if isinstance(children, list):
+            stack.extend(reversed(children))
 
 
 def count_urls(node: dict) -> int:
-    """Counts how many nodes in this subtree have an actual URL -- gives a
-    sense of how many pages live under a matched mobile branch without
-    listing them all."""
-    count = 1 if node.get("url") else 0
-    for child in node.get("children", []):
-        count += count_urls(child)
-    return count
+    return sum(1 for candidate in walk_nodes(node) if candidate.get("url"))
 
 
 def url_path_only(url: str) -> str:
-    """Strips scheme+domain from a URL, keeping only the path (+query).
-    Matching must never be done against the full URL -- some of these
-    sites (whatmobile.com.pk, mymobile.pk, whatamobile.com.pk) have
-    'mobile' baked into the domain name itself, which would otherwise
-    make every single page on the site match regardless of its actual
-    path."""
     parsed = urlparse(url)
-    return parsed.path + ("?" + parsed.query if parsed.query else "")
+    return parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
 
-def node_matches(node: dict, pattern: re.Pattern) -> bool:
+def node_matches(node: dict, pattern: re.Pattern[str]) -> bool:
     path = node.get("path") or ""
     if pattern.search(path):
         return True
     url = node.get("url") or ""
-    if url and pattern.search(url_path_only(url)):
-        return True
-    return False
+    return bool(url and pattern.search(url_path_only(url)))
 
 
-def find_mobile_branches(node: dict, pattern: re.Pattern, results: List[dict]) -> None:
-    """DFS that stops descending as soon as it finds a match, since
-    everything below a matched node is already part of that mobile
-    section."""
+def find_mobile_branches(
+    node: dict,
+    pattern: re.Pattern[str],
+    results: List[dict],
+) -> None:
+    """Collect the first keyword match along each branch."""
     if node_matches(node, pattern):
         results.append(node)
-        return  # do not descend further -- this whole branch is "mobile"
-
+        return
     for child in node.get("children", []):
         find_mobile_branches(child, pattern, results)
 
 
-def find_all_matching_urls(node: dict, pattern: re.Pattern, results: List[dict]) -> None:
-    """Alternative walk for --mode all: collects every node with a URL
-    whose path/url matches, without stopping at the first match. Used
-    when you actually want the full flat list rather than just branch
-    bases."""
-    if node.get("url") and node_matches(node, pattern):
-        results.append(node)
-    for child in node.get("children", []):
-        find_all_matching_urls(child, pattern, results)
+def find_all_matching_urls(
+    node: dict,
+    pattern: re.Pattern[str],
+    results: List[dict],
+) -> None:
+    for candidate in walk_nodes(node):
+        if candidate.get("url") and node_matches(candidate, pattern):
+            results.append(candidate)
 
 
 def domain_root(base_url: str) -> str:
-    """base_url in the tree JSON can be a subpath (e.g. https://site.com/mobiles/),
-    not the site root -- so inferred URLs must be built from scheme+netloc only,
-    never from base_url directly, or paths outside that subpath come out wrong."""
     parsed = urlparse(base_url)
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def build_base_entry(node: dict, base_url: str, pattern: re.Pattern) -> dict:
+def build_base_entry(node: dict, base_url: str, pattern: re.Pattern[str]) -> dict:
     url = node.get("url")
     inferred = False
     if not url:
-        url = domain_root(base_url) + node.get("path", "")
+        url = domain_root(base_url) + (node.get("path") or "")
         inferred = True
 
-    match = pattern.search(node.get("path") or url)
-
+    match_target = node.get("path") or url_path_only(url)
+    match = pattern.search(match_target)
     return {
         "url": url,
         "path": node.get("path"),
@@ -148,8 +154,9 @@ def build_base_entry(node: dict, base_url: str, pattern: re.Pattern) -> dict:
     }
 
 
-def build_flat_entry(node: dict, pattern: re.Pattern) -> dict:
-    match = pattern.search(node.get("path") or node.get("url") or "")
+def build_flat_entry(node: dict, pattern: re.Pattern[str]) -> dict:
+    match_target = node.get("path") or url_path_only(node["url"])
+    match = pattern.search(match_target)
     return {
         "url": node["url"],
         "path": node.get("path"),
@@ -157,98 +164,260 @@ def build_flat_entry(node: dict, pattern: re.Pattern) -> dict:
     }
 
 
-def filter_site_file(path: Path, pattern: re.Pattern, mode: str) -> Optional[dict]:
+def gsmarena_product_match(url: str) -> Optional[re.Match[str]]:
+    """Return the product-page regex match, or ``None`` for other URLs."""
+    parsed = urlparse(url)
+    if canonical_site(url) != "gsmarena.com" or parsed.query or parsed.fragment:
+        return None
+
+    filename = unquote(Path(parsed.path).name)
+    match = GSMARENA_PRODUCT_FILE_RE.fullmatch(filename)
+    if match is None:
+        return None
+
+    slug = match.group("slug")
+    if "_" not in slug:
+        return None
+    if GSMARENA_NON_PRODUCT_MARKER_RE.search(filename):
+        return None
+    return match
+
+
+def extract_gsmarena_products(tree: dict) -> List[dict]:
+    """Extract and de-duplicate GSMArena specification-page URLs."""
+    products: List[dict] = []
+    seen: set[str] = set()
+
+    for node in walk_nodes(tree):
+        url = node.get("url")
+        if not isinstance(url, str) or url in seen:
+            continue
+        match = gsmarena_product_match(url)
+        if match is None:
+            continue
+        seen.add(url)
+        products.append(
+            {
+                "url": url,
+                "path": node.get("path") or urlparse(url).path,
+                "product_id": int(match.group("product_id")),
+                "matched_by": "gsmarena_product_pattern",
+            }
+        )
+
+    return products
+
+
+def keyword_result(
+    data: dict,
+    pattern: re.Pattern[str],
+    mode: str,
+) -> dict:
+    tree = data["tree"]
+    base_url = data.get("base_url", "")
+
+    matches: List[dict] = []
+    if mode == "base":
+        for child in tree.get("children", []):
+            find_mobile_branches(child, pattern, matches)
+        entries = [build_base_entry(node, base_url, pattern) for node in matches]
+    else:
+        for child in tree.get("children", []):
+            find_all_matching_urls(child, pattern, matches)
+        entries = [build_flat_entry(node, pattern) for node in matches]
+
+    return {
+        "site": data.get("site"),
+        "base_url": base_url,
+        "source_url_count": data.get("url_count"),
+        "mode": mode,
+        "strategy": "keyword",
+        "match_count": len(entries),
+        "mobile_urls": entries,
+    }
+
+
+def gsmarena_result(data: dict) -> dict:
+    products = extract_gsmarena_products(data["tree"])
+    return {
+        "site": data.get("site", "gsmarena.com"),
+        "base_url": data.get("base_url", "https://www.gsmarena.com"),
+        "source_url_count": data.get("url_count"),
+        "mode": "products",
+        "strategy": "gsmarena_product_pages",
+        "match_count": len(products),
+        "mobile_urls": products,
+    }
+
+
+def load_tree_file(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         log.error("Could not read %s: %s", path, exc)
         return None
 
-    tree = data.get("tree")
-    base_url = data.get("base_url", "")
-    site = data.get("site", path.stem)
+    if not isinstance(data, dict) or not isinstance(data.get("tree"), dict):
+        log.error("%s does not contain a valid 'tree' object", path)
+        return None
+    return data
 
-    if not tree:
-        log.warning("%s has no 'tree' field, skipping", path.name)
+
+def filter_site_file(
+    path: Path,
+    pattern: re.Pattern[str],
+    mode: str,
+    strategy: str = "auto",
+) -> Optional[dict]:
+    data = load_tree_file(path)
+    if data is None:
         return None
 
-    if mode == "base":
-        matches: List[dict] = []
-        for child in tree.get("children", []):
-            find_mobile_branches(child, pattern, matches)
-        entries = [build_base_entry(n, base_url, pattern) for n in matches]
-    else:  # mode == "all"
-        matches = []
-        for child in tree.get("children", []):
-            find_all_matching_urls(child, pattern, matches)
-        entries = [build_flat_entry(n, pattern) for n in matches]
+    site = canonical_site(str(data.get("site") or path.stem))
+    resolved_strategy = strategy
+    if strategy == "auto":
+        resolved_strategy = "gsmarena-products" if site == "gsmarena.com" else "keyword"
 
-    return {
-        "site": site,
-        "base_url": base_url,
-        "source_url_count": data.get("url_count"),
-        "mode": mode,
-        "match_count": len(entries),
-        "mobile_urls": entries,
-    }
+    if resolved_strategy == "gsmarena-products":
+        if site != "gsmarena.com":
+            log.error("GSMArena product strategy cannot process site %s", site)
+            return None
+        return gsmarena_result(data)
+    return keyword_result(data, pattern, mode)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Filter site-tree JSONs down to mobile-phone URL branches.")
-    parser.add_argument("--input-dir", default=DEFAULT_INPUT_DIR, help="Directory of <site>.json tree files")
-    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Where to write filtered JSON files")
+def atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def select_input_files(input_dir: Path, sites: Sequence[str]) -> List[Path]:
+    if not sites:
+        return sorted(input_dir.glob("*.json"))
+
+    selected: List[Path] = []
+    for requested in sites:
+        site = canonical_site(requested)
+        candidate = input_dir / f"{site}.json"
+        if candidate.exists():
+            selected.append(candidate)
+        else:
+            log.error("Site tree not found: %s", candidate)
+    return selected
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Filter sitemap trees into mobile URL manifests."
+    )
+    parser.add_argument("--input-dir", default=DEFAULT_INPUT_DIR)
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--site",
+        action="append",
+        default=[],
+        help="Process only this site (repeatable), e.g. --site gsmarena.com",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["auto", "keyword", "gsmarena-products"],
+        default="auto",
+        help="'auto' selects the GSMArena product rule only for gsmarena.com.",
+    )
     parser.add_argument(
         "--keywords",
         default=",".join(DEFAULT_KEYWORDS),
-        help="Comma-separated substrings to match (case-insensitive) against URL paths, e.g. 'mobile,smartphone'",
+        help="Comma-separated path keywords for the generic strategy.",
     )
     parser.add_argument(
         "--mode",
         choices=["base", "all"],
         default="base",
-        help="'base' (default): just the top-most matching URL per branch. "
-             "'all': every individual matching URL in the tree, no stopping at first match.",
+        help="Generic keyword mode; GSMArena product mode ignores this option.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--sample",
+        type=positive_int,
+        default=5,
+        help="Number of matched URLs to show in the log.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Inspect counts and samples without writing output files.",
+    )
+    return parser
 
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
-    keywords = [k for k in args.keywords.split(",") if k.strip()]
-    pattern = build_keyword_pattern(keywords)
 
-    if not input_dir.exists():
+    if not input_dir.is_dir():
         log.error("Input directory not found: %s", input_dir)
-        sys.exit(1)
+        return 2
 
-    json_files = sorted(input_dir.glob("*.json"))
+    keywords = [item.strip() for item in args.keywords.split(",") if item.strip()]
+    try:
+        pattern = build_keyword_pattern(keywords)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+
+    json_files = select_input_files(input_dir, args.site)
     if not json_files:
-        log.error("No .json files found in %s", input_dir)
-        sys.exit(1)
+        log.error("No matching JSON site trees found in %s", input_dir)
+        return 2
 
-    log.info("Filtering %d site file(s) with keywords=%s mode=%s", len(json_files), keywords, args.mode)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
     total_matches = 0
-
+    successful_files = 0
     for path in json_files:
-        result = filter_site_file(path, pattern, args.mode)
+        result = filter_site_file(path, pattern, args.mode, args.strategy)
         if result is None:
             continue
 
-        out_path = output_dir / path.name
-        out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-
+        successful_files += 1
         total_matches += result["match_count"]
-        log.info("%s -> %d mobile URL(s) -> %s", path.name, result["match_count"], out_path)
-
-        # quick preview in the log so you can sanity-check without opening the file
-        for entry in result["mobile_urls"][:5]:
+        log.info(
+            "%s: strategy=%s, matched=%d of source=%s",
+            path.name,
+            result["strategy"],
+            result["match_count"],
+            result.get("source_url_count"),
+        )
+        for entry in result["mobile_urls"][: args.sample]:
             log.info("    %s", entry["url"])
-        if result["match_count"] > 5:
-            log.info("    ... and %d more", result["match_count"] - 5)
 
-    log.info("Done. %d total mobile URL(s) across %d site(s) -> %s", total_matches, len(json_files), output_dir)
+        if not args.dry_run:
+            out_path = output_dir / path.name
+            atomic_write_json(out_path, result)
+            log.info("Saved %s", out_path)
+
+    if successful_files == 0:
+        return 1
+
+    action = "Would write" if args.dry_run else "Wrote"
+    log.info(
+        "%s %d manifest(s) containing %d matched URL(s)",
+        action,
+        successful_files,
+        total_matches,
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

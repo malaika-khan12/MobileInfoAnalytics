@@ -10,11 +10,11 @@ https://mymobile.pk/
 https://www.whatamobile.com.pk/
 
 UNAUTHORIZED_SITES:
-https://qeemat.com.pk/
+https://qeemat.com.pk/cl/smartphones
 https://asaanprice.com/
-https://qmart.pk/
+https://qmart.pk/mobile-phones/
 https://wisemarket.com.pk/collection/mobiles/
-https://www.urdupoint.com/mobile/
+https://www.urdupoint.com/mobile/brands.html
 https://phonebolee.com/
 https://whatmobilepriceoye.com/
 

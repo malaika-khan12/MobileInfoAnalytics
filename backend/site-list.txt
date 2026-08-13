@@ -1,11 +1,11 @@
 MAIN_SITE:
-https://www.gsmarena.com
+https://www.gsmarena.com/search.php3?
 
 SITES:
 https://priceoye.pk/mobiles/
 https://www.whatmobile.com.pk/
-https://www.daraz.pk/
-https://www.mega.pk/mobiles_products/
+https://www.daraz.pk/catalog/?spm=a2a0e.searchlist.cate_5.5.5b1427f2IwB4l7&q=Smart%20Phones&from=hp_categories&src=all_channel
+https://www.mega.pk/mobiles/
 https://mymobile.pk/
 https://www.whatamobile.com.pk/
 

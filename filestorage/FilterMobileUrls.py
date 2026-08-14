@@ -72,6 +72,20 @@ GSMARENA_CATALOG_FILE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# WhatMobile keeps both phone detail pages and catalogues at its root.  Detail
+# pages have a brand/model underscore plus a model-name hyphen (for example
+# ``Samsung_Galaxy-A57``), while brand and price catalogues end in one of the
+# forms below.  This deliberately excludes StolenMobile.php, search pages and
+# generic pages which the historical keyword-only manifest incorrectly kept.
+WHATMOBILE_PRODUCT_RE = re.compile(
+    r"^[A-Za-z][A-Za-z0-9']*_[A-Za-z0-9][A-Za-z0-9_]*-"
+    r"[A-Za-z0-9][A-Za-z0-9-]*$"
+)
+WHATMOBILE_CATALOG_RE = re.compile(
+    r"^(?:[A-Za-z][A-Za-z0-9']*_)?(?:Mobiles_Prices|\d+_to_\d+_Mobiles)$",
+    re.IGNORECASE,
+)
+
 
 def build_keyword_pattern(keywords: Sequence[str]) -> re.Pattern[str]:
     escaped = [re.escape(keyword.strip()) for keyword in keywords if keyword.strip()]
@@ -203,6 +217,47 @@ def gsmarena_catalog_match(url: str) -> Optional[re.Match[str]]:
     if canonical_site(url) != "gsmarena.com" or parsed.query or parsed.fragment:
         return None
     return GSMARENA_CATALOG_FILE_RE.fullmatch(unquote(Path(parsed.path).name))
+
+
+def whatmobile_product_match(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        canonical_site(url) == "whatmobile.com.pk"
+        and not parsed.query
+        and not parsed.fragment
+        and bool(WHATMOBILE_PRODUCT_RE.fullmatch(unquote(Path(parsed.path).name)))
+    )
+
+
+def whatmobile_catalog_match(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        canonical_site(url) == "whatmobile.com.pk"
+        and not parsed.query
+        and not parsed.fragment
+        and bool(WHATMOBILE_CATALOG_RE.fullmatch(unquote(Path(parsed.path).name)))
+    )
+
+
+def whatmobile_result(data: dict) -> dict:
+    """Build clean brand/price catalogue seeds plus direct URL coverage data."""
+    catalogs, products, seen_catalogs, seen_products = [], [], set(), set()
+    for node in walk_nodes(data["tree"]):
+        url = node.get("url")
+        if not isinstance(url, str):
+            continue
+        if whatmobile_catalog_match(url) and url not in seen_catalogs:
+            seen_catalogs.add(url)
+            catalogs.append({"url": url, "path": node.get("path") or urlparse(url).path})
+        elif whatmobile_product_match(url) and url not in seen_products:
+            seen_products.add(url)
+            products.append({"url": url, "path": node.get("path") or urlparse(url).path})
+    return {
+        "site": data.get("site", "whatmobile.com.pk"), "base_url": data.get("base_url"),
+        "source_url_count": data.get("url_count"), "mode": "catalog_tree",
+        "strategy": "whatmobile_catalog_and_product_pages", "catalog_count": len(catalogs),
+        "match_count": len(products), "catalog_urls": catalogs, "mobile_urls": products,
+    }
 
 
 def extract_gsmarena_products(tree: dict) -> List[dict]:
@@ -352,13 +407,21 @@ def filter_site_file(
     site = canonical_site(str(data.get("site") or path.stem))
     resolved_strategy = strategy
     if strategy == "auto":
-        resolved_strategy = "gsmarena-catalog" if site == "gsmarena.com" else "keyword"
+        resolved_strategy = (
+            "gsmarena-catalog" if site == "gsmarena.com" else
+            "whatmobile-catalog" if site == "whatmobile.com.pk" else "keyword"
+        )
 
     if resolved_strategy in {"gsmarena-catalog", "gsmarena-products"}:
         if site != "gsmarena.com":
             log.error("GSMArena product strategy cannot process site %s", site)
             return None
         return gsmarena_result(data)
+    if resolved_strategy == "whatmobile-catalog":
+        if site != "whatmobile.com.pk":
+            log.error("WhatMobile catalogue strategy cannot process site %s", site)
+            return None
+        return whatmobile_result(data)
     return keyword_result(data, pattern, mode)
 
 
@@ -408,7 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--strategy",
-        choices=["auto", "keyword", "gsmarena-catalog", "gsmarena-products"],
+        choices=["auto", "keyword", "gsmarena-catalog", "gsmarena-products", "whatmobile-catalog"],
         default="auto",
         help="'auto' creates a maker-catalog tree plus product fallback for GSMArena.",
     )

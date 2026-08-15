@@ -1,9 +1,9 @@
 """
 FilterMobileUrls.py
 
-Build mobile-URL manifests consumed by site navigators.
+Build the mobile-URL manifests consumed by site navigators.
 
-Strategies:
+Site-specific strategies:
 
 - Generic sites:
     keyword matching
@@ -12,27 +12,13 @@ Strategies:
     maker catalogues + direct product pages
 
 - WhatMobile:
-    catalogues + direct product pages
+    catalogue pages + direct product pages
 
 - WhatAMobile:
     direct /product/ pages
 
-WhatAMobile is different from WhatMobile:
-    WhatAMobile product URLs use:
-
-        https://www.whatamobile.com.pk/product/<slug>/
-
-    The site also contains:
-        /product-cat/
-        /brand/
-        /category/
-        /comparison/
-        /what-mobile/
-        articles
-        static pages
-
-    Therefore the generic "mobile" keyword strategy is not
-    appropriate for WhatAMobile.
+- Mega.pk:
+    direct /mobiles_products/<id>/<slug>.html pages
 """
 
 from __future__ import annotations
@@ -42,7 +28,6 @@ import json
 import logging
 import re
 import sys
-
 from pathlib import Path
 from typing import Iterator, List, Optional, Sequence
 from urllib.parse import urlparse
@@ -57,18 +42,13 @@ logging.basicConfig(
 log = logging.getLogger("FilterMobileUrls")
 
 
-# ============================================================================
-# DEFAULTS
-# ============================================================================
-
 DEFAULT_INPUT_DIR = "filestorage/sitemap"
 DEFAULT_OUTPUT_DIR = "filestorage/sitemap_mobile"
-
 DEFAULT_KEYWORDS = ["mobile"]
 
 
 # ============================================================================
-# GSMARENA PATTERNS
+# GSMARENA
 # ============================================================================
 
 GSMARENA_PRODUCT_FILE_RE = re.compile(
@@ -91,7 +71,7 @@ GSMARENA_CATALOG_FILE_RE = re.compile(
 
 
 # ============================================================================
-# WHATMOBILE PATTERNS
+# WHATMOBILE
 # ============================================================================
 
 WHATMOBILE_PRODUCT_RE = re.compile(
@@ -107,7 +87,7 @@ WHATMOBILE_CATALOG_RE = re.compile(
 
 
 # ============================================================================
-# WHATAMOBILE PATTERNS
+# WHATAMOBILE
 # ============================================================================
 
 WHATAMOBILE_PRODUCT_PATH_RE = re.compile(
@@ -115,9 +95,25 @@ WHATAMOBILE_PRODUCT_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 WHATAMOBILE_CATALOG_PATH_RE = re.compile(
     r"^/product-cat/mobiles(?:/page/\d+)?/?$",
+    re.IGNORECASE,
+)
+
+
+# ============================================================================
+# MEGA.PK
+# ============================================================================
+
+MEGA_PRODUCT_PATH_RE = re.compile(
+    r"^/mobiles_products/"
+    r"\d+/"
+    r"[^/?#]+\.html/?$",
+    re.IGNORECASE,
+)
+
+MEGA_CATALOG_PATH_RE = re.compile(
+    r"^/mobiles(?:/\d+)?/?$",
     re.IGNORECASE,
 )
 
@@ -131,9 +127,7 @@ def build_keyword_pattern(
 ) -> re.Pattern[str]:
 
     escaped = [
-        re.escape(
-            keyword.strip()
-        )
+        re.escape(keyword.strip())
         for keyword in keywords
         if keyword.strip()
     ]
@@ -149,12 +143,7 @@ def build_keyword_pattern(
     )
 
 
-def canonical_site(
-    value: str,
-) -> str:
-    """
-    Normalize a filename/domain/base URL to comparable site name.
-    """
+def canonical_site(value: str) -> str:
 
     parsed = urlparse(
         value
@@ -179,9 +168,6 @@ def canonical_site(
 def walk_nodes(
     node: dict,
 ) -> Iterator[dict]:
-    """
-    Yield a tree node and all descendants.
-    """
 
     stack = [node]
 
@@ -217,8 +203,7 @@ def count_urls(
 
     return sum(
         1
-        for candidate
-        in walk_nodes(node)
+        for candidate in walk_nodes(node)
         if candidate.get("url")
     )
 
@@ -268,9 +253,6 @@ def find_mobile_branches(
     pattern: re.Pattern[str],
     results: List[dict],
 ) -> None:
-    """
-    Collect the first keyword match along each branch.
-    """
 
     if node_matches(
         node,
@@ -305,9 +287,7 @@ def find_all_matching_urls(
                 pattern,
             )
         ):
-            results.append(
-                candidate
-            )
+            results.append(candidate)
 
 
 def domain_root(
@@ -329,7 +309,6 @@ def build_base_entry(
 ) -> dict:
 
     url = node.get("url")
-
     inferred = False
 
     if not url:
@@ -402,9 +381,6 @@ def build_flat_entry(
 def gsmarena_product_match(
     url: str,
 ) -> Optional[re.Match[str]]:
-    """
-    Return the GSMArena product regex match, or None.
-    """
 
     parsed = urlparse(url)
 
@@ -416,26 +392,20 @@ def gsmarena_product_match(
     ):
         return None
 
-    filename = (
-        Path(
-            parsed.path
-        ).name
-    )
+    filename = Path(
+        parsed.path
+    ).name
 
-    match = (
-        GSMARENA_PRODUCT_FILE_RE.fullmatch(
-            filename
-        )
+    match = GSMARENA_PRODUCT_FILE_RE.fullmatch(
+        filename
     )
 
     if match is None:
         return None
 
-    slug = match.group(
+    if "_" not in match.group(
         "slug"
-    )
-
-    if "_" not in slug:
+    ):
         return None
 
     if GSMARENA_NON_PRODUCT_MARKER_RE.search(
@@ -460,10 +430,8 @@ def gsmarena_catalog_match(
     ):
         return None
 
-    return (
-        GSMARENA_CATALOG_FILE_RE.fullmatch(
-            Path(parsed.path).name
-        )
+    return GSMARENA_CATALOG_FILE_RE.fullmatch(
+        Path(parsed.path).name
     )
 
 
@@ -516,11 +484,6 @@ def whatmobile_catalog_match(
 def whatamobile_product_match(
     url: str,
 ) -> bool:
-    """
-    WhatAMobile product pages use:
-
-        https://www.whatamobile.com.pk/product/<slug>/
-    """
 
     parsed = urlparse(url)
 
@@ -546,12 +509,6 @@ def whatamobile_product_match(
 def whatamobile_catalog_match(
     url: str,
 ) -> bool:
-    """
-    Main WhatAMobile mobile catalogue:
-
-        /product-cat/mobiles/
-        /product-cat/mobiles/page/N/
-    """
 
     parsed = urlparse(url)
 
@@ -575,15 +532,76 @@ def whatamobile_catalog_match(
 
 
 # ============================================================================
+# MEGA MATCHERS
+# ============================================================================
+
+def mega_product_match(
+    url: str,
+) -> bool:
+    """
+    Match only individual Mega.pk mobile product pages.
+
+    Example:
+
+        /mobiles_products/27057/
+        Samsung-Galaxy-A57-...html
+    """
+
+    parsed = urlparse(url)
+
+    if (
+        canonical_site(url)
+        not in {
+            "mega.pk",
+        }
+    ):
+        return False
+
+    if (
+        parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    return bool(
+        MEGA_PRODUCT_PATH_RE.fullmatch(
+            parsed.path
+        )
+    )
+
+
+def mega_catalog_match(
+    url: str,
+) -> bool:
+
+    parsed = urlparse(url)
+
+    if (
+        canonical_site(url)
+        != "mega.pk"
+    ):
+        return False
+
+    if (
+        parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    return bool(
+        MEGA_CATALOG_PATH_RE.fullmatch(
+            parsed.path
+        )
+    )
+
+
+# ============================================================================
 # WHATMOBILE RESULT
 # ============================================================================
 
 def whatmobile_result(
     data: dict,
 ) -> dict:
-    """
-    Build WhatMobile catalogue seeds plus direct product URLs.
-    """
 
     catalogs = []
     products = []
@@ -627,9 +645,7 @@ def whatmobile_result(
             and url not in seen_products
         ):
 
-            seen_products.add(
-                url
-            )
+            seen_products.add(url)
 
             products.append(
                 {
@@ -676,25 +692,15 @@ def whatmobile_result(
 def extract_whatamobile_products(
     tree: dict,
 ) -> List[dict]:
-    """
-    Extract every direct WhatAMobile product URL from the
-    already-built sitemap tree.
-
-    Ordering is the tree traversal order.
-    URLs are deduplicated.
-    """
 
     products: List[dict] = []
-
     seen: set[str] = set()
 
     for node in walk_nodes(
         tree
     ):
 
-        url = node.get(
-            "url"
-        )
+        url = node.get("url")
 
         if not isinstance(
             url,
@@ -733,22 +739,15 @@ def extract_whatamobile_products(
 def extract_whatamobile_catalogs(
     tree: dict,
 ) -> List[dict]:
-    """
-    Extract WhatAMobile mobile catalogue URLs already
-    present in the source sitemap.
-    """
 
     catalogs: List[dict] = []
-
     seen: set[str] = set()
 
     for node in walk_nodes(
         tree
     ):
 
-        url = node.get(
-            "url"
-        )
+        url = node.get("url")
 
         if not isinstance(
             url,
@@ -787,28 +786,13 @@ def extract_whatamobile_catalogs(
 def whatamobile_result(
     data: dict,
 ) -> dict:
-    """
-    Build a dedicated WhatAMobile manifest.
 
-    Important:
-    - Uses direct /product/ URLs from the sitemap.
-    - Does not use keyword matching.
-    - Does not include /product-cat/ pages as products.
-    - Deduplicates products while preserving source order.
-    """
-
-    tree = data["tree"]
-
-    products = (
-        extract_whatamobile_products(
-            tree
-        )
+    products = extract_whatamobile_products(
+        data["tree"]
     )
 
-    catalogs = (
-        extract_whatamobile_catalogs(
-            tree
-        )
+    catalogs = extract_whatamobile_catalogs(
+        data["tree"]
     )
 
     base_url = data.get(
@@ -841,12 +825,17 @@ def whatamobile_result(
 
 
 # ============================================================================
-# GSMARENA
+# MEGA RESULT
 # ============================================================================
 
-def extract_gsmarena_products(
+def extract_mega_products(
     tree: dict,
 ) -> List[dict]:
+    """
+    Extract direct Mega.pk mobile product URLs.
+
+    Only /mobiles_products/<id>/<slug>.html is accepted.
+    """
 
     products: List[dict] = []
 
@@ -856,9 +845,169 @@ def extract_gsmarena_products(
         tree
     ):
 
-        url = node.get(
-            "url"
+        url = node.get("url")
+
+        if not isinstance(
+            url,
+            str,
+        ):
+            continue
+
+        if url in seen:
+            continue
+
+        if not mega_product_match(
+            url
+        ):
+            continue
+
+        seen.add(url)
+
+        parsed = urlparse(url)
+
+        product_match = re.search(
+            r"/mobiles_products/(\d+)/",
+            parsed.path,
+            re.IGNORECASE,
         )
+
+        product_id = (
+            int(product_match.group(1))
+            if product_match
+            else None
+        )
+
+        products.append(
+            {
+                "url": url,
+                "path": (
+                    node.get("path")
+                    or parsed.path
+                ),
+                "product_id": product_id,
+                "matched_by": (
+                    "mega_mobile_product_path"
+                ),
+            }
+        )
+
+    return products
+
+
+def extract_mega_catalogs(
+    tree: dict,
+) -> List[dict]:
+
+    catalogs: List[dict] = []
+
+    seen: set[str] = set()
+
+    for node in walk_nodes(
+        tree
+    ):
+
+        url = node.get("url")
+
+        if not isinstance(
+            url,
+            str,
+        ):
+            continue
+
+        if url in seen:
+            continue
+
+        if not mega_catalog_match(
+            url
+        ):
+            continue
+
+        seen.add(url)
+
+        catalogs.append(
+            {
+                "url": url,
+                "path": (
+                    node.get("path")
+                    or urlparse(
+                        url
+                    ).path
+                ),
+                "matched_by": (
+                    "mega_mobile_catalog_path"
+                ),
+            }
+        )
+
+    return catalogs
+
+
+def mega_result(
+    data: dict,
+) -> dict:
+    """
+    Build Mega.pk direct-product manifest.
+
+    This intentionally excludes:
+        /mobiles/comparison/
+        /mobiles/
+        /brand/
+        /product/
+        accessories
+        non-mobile product sections
+    """
+
+    products = extract_mega_products(
+        data["tree"]
+    )
+
+    catalogs = extract_mega_catalogs(
+        data["tree"]
+    )
+
+    base_url = data.get(
+        "base_url",
+        "https://www.mega.pk",
+    )
+
+    return {
+        "site": data.get(
+            "site",
+            "mega.pk",
+        ),
+        "base_url": base_url,
+        "source_url_count": data.get(
+            "url_count"
+        ),
+        "mode": "direct_products",
+        "strategy": "mega_mobile_product_path",
+        "catalog_count": len(
+            catalogs
+        ),
+        "match_count": len(
+            products
+        ),
+        "catalog_urls": catalogs,
+        "mobile_urls": products,
+    }
+
+
+# ============================================================================
+# GSMARENA RESULT
+# ============================================================================
+
+def extract_gsmarena_products(
+    tree: dict,
+) -> List[dict]:
+
+    products: List[dict] = []
+    seen: set[str] = set()
+
+    for node in walk_nodes(
+        tree
+    ):
+
+        url = node.get("url")
 
         if not isinstance(
             url,
@@ -906,16 +1055,13 @@ def extract_gsmarena_catalogs(
 ) -> List[dict]:
 
     catalogs: List[dict] = []
-
     seen: set[str] = set()
 
     for node in walk_nodes(
         tree
     ):
 
-        url = node.get(
-            "url"
-        )
+        url = node.get("url")
 
         if not isinstance(
             url,
@@ -1010,16 +1156,12 @@ def gsmarena_result(
     data: dict,
 ) -> dict:
 
-    catalogs = (
-        extract_gsmarena_catalogs(
-            data["tree"]
-        )
+    catalogs = extract_gsmarena_catalogs(
+        data["tree"]
     )
 
-    products = (
-        extract_gsmarena_products(
-            data["tree"]
-        )
+    products = extract_gsmarena_products(
+        data["tree"]
     )
 
     base_url = data.get(
@@ -1230,6 +1372,12 @@ def filter_site_file(
                 "whatamobile-products"
             )
 
+        elif site == "mega.pk":
+
+            resolved_strategy = (
+                "mega-products"
+            )
+
         else:
 
             resolved_strategy = (
@@ -1295,6 +1443,24 @@ def filter_site_file(
             data
         )
 
+    if resolved_strategy == (
+        "mega-products"
+    ):
+
+        if site != "mega.pk":
+
+            log.error(
+                "Mega strategy cannot "
+                "process site %s",
+                site,
+            )
+
+            return None
+
+        return mega_result(
+            data
+        )
+
     return keyword_result(
         data,
         pattern,
@@ -1303,7 +1469,7 @@ def filter_site_file(
 
 
 # ============================================================================
-# ATOMIC WRITE
+# WRITE
 # ============================================================================
 
 def atomic_write_json(
@@ -1345,6 +1511,7 @@ def select_input_files(
 ) -> List[Path]:
 
     if not sites:
+
         return sorted(
             input_dir.glob(
                 "*.json"
@@ -1381,7 +1548,7 @@ def select_input_files(
 
 
 # ============================================================================
-# CLI HELPERS
+# CLI
 # ============================================================================
 
 def positive_int(
@@ -1397,10 +1564,6 @@ def positive_int(
 
     return parsed
 
-
-# ============================================================================
-# PARSER
-# ============================================================================
 
 def build_parser():
 
@@ -1426,8 +1589,7 @@ def build_parser():
         action="append",
         default=[],
         help=(
-            "Process only this site. "
-            "Repeatable."
+            "Process only this site. Repeatable."
         ),
     )
 
@@ -1440,21 +1602,15 @@ def build_parser():
             "gsmarena-products",
             "whatmobile-catalog",
             "whatamobile-products",
+            "mega-products",
         ],
         default="auto",
-        help=(
-            "Site filtering strategy."
-        ),
     )
 
     parser.add_argument(
         "--keywords",
         default=",".join(
             DEFAULT_KEYWORDS
-        ),
-        help=(
-            "Comma-separated path keywords "
-            "for the generic strategy."
         ),
     )
 
@@ -1465,28 +1621,17 @@ def build_parser():
             "all",
         ],
         default="base",
-        help=(
-            "Generic keyword mode."
-        ),
     )
 
     parser.add_argument(
         "--sample",
         type=positive_int,
         default=5,
-        help=(
-            "Number of matched URLs to "
-            "show in the log."
-        ),
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Inspect counts without "
-            "writing output."
-        ),
     )
 
     return parser
@@ -1587,11 +1732,11 @@ def main(
         )
 
         # --------------------------------------------------------------
-        # WhatAMobile
+        # Mega
         # --------------------------------------------------------------
 
         if strategy_name == (
-            "whatamobile_product_path"
+            "mega_mobile_product_path"
         ):
 
             log.info(
@@ -1612,6 +1757,40 @@ def main(
                 result.get(
                     "catalog_count",
                     0,
+                ),
+            )
+
+            log.info(
+                "    Product sample:"
+            )
+
+            for entry in result[
+                "mobile_urls"
+            ][: args.sample]:
+
+                log.info(
+                    "      %s",
+                    entry["url"],
+                )
+
+        # --------------------------------------------------------------
+        # WhatAMobile
+        # --------------------------------------------------------------
+
+        elif strategy_name == (
+            "whatamobile_product_path"
+        ):
+
+            log.info(
+                "%s: strategy=%s, "
+                "products=%d of source=%s",
+                path.name,
+                strategy_name,
+                result[
+                    "match_count"
+                ],
+                result.get(
+                    "source_url_count"
                 ),
             )
 
@@ -1653,32 +1832,6 @@ def main(
                 ),
             )
 
-            log.info(
-                "    Catalog landing-page sample:"
-            )
-
-            for entry in result[
-                "catalog_urls"
-            ][: args.sample]:
-
-                log.info(
-                    "      %s",
-                    entry["url"],
-                )
-
-            log.info(
-                "    Direct product sample:"
-            )
-
-            for entry in result[
-                "mobile_urls"
-            ][: args.sample]:
-
-                log.info(
-                    "      %s",
-                    entry["url"],
-                )
-
         # --------------------------------------------------------------
         # WhatMobile
         # --------------------------------------------------------------
@@ -1704,32 +1857,6 @@ def main(
                 ),
             )
 
-            log.info(
-                "    Catalog sample:"
-            )
-
-            for entry in result[
-                "catalog_urls"
-            ][: args.sample]:
-
-                log.info(
-                    "      %s",
-                    entry["url"],
-                )
-
-            log.info(
-                "    Direct product sample:"
-            )
-
-            for entry in result[
-                "mobile_urls"
-            ][: args.sample]:
-
-                log.info(
-                    "      %s",
-                    entry["url"],
-                )
-
         # --------------------------------------------------------------
         # Generic
         # --------------------------------------------------------------
@@ -1748,15 +1875,6 @@ def main(
                     "source_url_count"
                 ),
             )
-
-            for entry in result[
-                "mobile_urls"
-            ][: args.sample]:
-
-                log.info(
-                    "    %s",
-                    entry["url"],
-                )
 
         # --------------------------------------------------------------
         # Write

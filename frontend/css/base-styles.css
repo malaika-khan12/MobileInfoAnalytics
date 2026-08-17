@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;600&family=Anaheim&display=swap');
+* {
+  --theGreenColor: #09855b;
+  --TextColor: #171a1f;
+  --Pink: #f2e0e7;
+  --DarkBlue: #5c8bc0;
+  --LightBlue: #e0edfc;
+  --boxBackground: #afe4f163;
+  --Shadow: rgba(0, 0, 0, 0.15);
+  --clickAbleLink: #ff2c2c;
+  --ratingYellow: #ff9100;
+  --statCardBG: #7f6d8d0a;
+  --statCardBorder: #dfdcbc;
+  --backgroundColour: radial-gradient(
+        circle at 20% 20%,
+      rgb(196, 255, 250) 0%, 
+      rgba(255, 237, 188, 1) 30%, 
+      rgba(236, 217, 255, 1) 55%, 
+      rgba(202, 224, 255, 1) 80%
+  );
+  --containerBackground: rgba(200,230,255,0.85);
+  --BoxShadow:rgba(0,0,0,0.25);
+  --textColour:#171a1f;
+  --purplish:#2e1b41;
+  --lightPurple:#9c91a7;
+  --lightRed:#e74c3c;
+  --darkRed:#c0392b;
+  --GreenColor: #09855b;
+  --Pink: #f2e0e7;
+  --DarkBlue: #5c8bc0;
+  --LightBlue: #e0edfc;
+  --boxBackground: #afe4f163;
+  --ratingYellow: #ff9100;
+  --statCardBG: #7f6d8d0a;
+  --statCardBorder: #dfdcbc;
+  --purple: #462c5f;
+  --purple-200: #e0d2ee;
+  --purple-tint: rgba(124,94,169,0.18);
+  --chip-bg: rgba(255,255,255,0.55);
+  --chip-border: rgba(23,26,31,0.18);
+}
+/* BODY + LAYOUT */
+body {
+  margin: 0;
+  margin-top: 5px;
+  color: #ffffff;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: radial-gradient(
+    circle at 20% 20%,
+    rgb(196, 255, 250) 0%,
+    rgba(255, 237, 188, 1) 30%,
+    rgba(236, 217, 255, 1) 55%,
+    rgba(202, 224, 255, 1) 80%
+  );
+  background-blend-mode: screen;
+  background-size: cover;
+  background-attachment: fixed;
+}

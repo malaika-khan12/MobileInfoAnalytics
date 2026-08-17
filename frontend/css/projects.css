@@ -1,0 +1,405 @@
+/* projects.css - 2-per-row grid + cleaner cards + poster-style image frame */
+
+/* Fade-in animation */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Project Header */
+.proj-head {
+  padding: var(--space-2xl);
+  margin: 0 0 var(--space-2xl);
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  animation: fadeInUp 0.6s ease both;
+}
+
+.proj-title h1 {
+  font-size: var(--text-5xl);
+  margin-bottom: var(--space-md);
+  font-family: var(--font-display);
+  background: linear-gradient(135deg, var(--text-primary), var(--primary-dark));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.proj-title .muted {
+  font-size: var(--text-lg);
+  color: var(--text-tertiary);
+  max-width: 600px;
+}
+
+/* Filter Controls */
+.proj-controls { margin-top: var(--space-2xl); }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+.filter-pill {
+  padding: var(--space-sm) var(--space-xl);
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-light);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.filter-pill:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--border-medium);
+}
+
+.filter-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+  box-shadow: var(--shadow-md);
+}
+
+.filter-pill.active:hover {
+  background: var(--primary-dark);
+  border-color: var(--primary-dark);
+}
+
+/* =========================================================
+   FIX: Projects Grid = ALWAYS 2 per row (except mobile)
+   ========================================================= */
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  margin-top: var(--space-2xl);
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* =========================================================
+   Project Card
+   ========================================================= */
+.project-card {
+  cursor: pointer;
+  padding: 22px;
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  border-radius: 24px;
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  position: relative;
+  animation: fadeInUp 0.6s ease both;
+  overflow: hidden;
+}
+
+.project-card:hover {
+  transform: scale(1.025);
+  border-color: var(--primary-light);
+  box-shadow: 0 12px 25px var(--Shadow);
+}
+
+.project-card:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Thumbnail Frame: make image touch border in at least one direction */
+.thumb {
+  width: 100%;
+  max-width: 340px;
+  height: 190px;
+
+  object-fit: contain;      /* keeps aspect ratio, no distortion */
+  object-position: center;
+
+  padding: 0;               /* IMPORTANT: removes inner gap */
+  background: transparent;  /* no “inner canvas” */
+
+  border-radius: 18px;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-md);
+
+  display: block;
+  transition: transform 0.25s ease;
+}
+
+.project-card:hover .thumb {
+  transform: scale(1.03);
+}
+
+
+:root[data-theme="dark"] .thumb { background: #ffffff; }
+
+
+/* Card Content */
+.project-card > div {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+}
+
+.pname {
+  font-weight: 800;
+  font-size: 20px;
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  line-height: 1.15;
+  max-width: 520px;
+}
+
+/* Subtitle exists for modal, but we will NOT render it in cards via JS */
+.pmeta {
+  display: none;
+}
+
+/* Tags */
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.card-tags span {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 11px;
+  border: 1px solid var(--border-light);
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.project-card:hover .card-tags span {
+  background: var(--primary-lighter);
+  color: var(--primary-dark);
+  border-color: var(--primary-light);
+}
+
+:root[data-theme="dark"] .project-card:hover .card-tags span {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--primary);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+/* Empty State */
+.projects-grid > .card {
+  padding: var(--space-3xl);
+  text-align: center;
+  background: var(--bg-secondary);
+}
+
+.projects-grid > .card b {
+  display: block;
+  font-size: var(--text-2xl);
+  margin-bottom: var(--space-md);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+}
+
+/* =========================================================
+   Modal - keep scroll, hide scrollbar (as you wanted)
+   ========================================================= */
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xl);
+}
+
+.modal.open { display: flex; }
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  animation: fadeIn 300ms ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(30px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-panel {
+  position: relative;
+  width: 100%;
+  max-width: 1100px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border-radius: var(--radius-2xl);
+  box-shadow: var(--shadow-2xl);
+  animation: slideUp 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  border: 1px solid var(--border-light);
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.modal-panel::-webkit-scrollbar { width: 0; height: 0; }
+
+.modal-close {
+  position: absolute;
+  top: var(--space-lg);
+  right: var(--space-lg);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-full);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: var(--text-xl);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  z-index: 10;
+}
+
+.modal-close:hover {
+  background: var(--error);
+  color: white;
+  border-color: var(--error);
+  transform: rotate(90deg) scale(1.1);
+}
+
+.modal-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2xl);
+  padding: var(--space-3xl);
+}
+
+.modal-img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  object-position: center;
+  background: #fff;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme="dark"] .modal-img { background: #fff; }
+
+.modal-content { display: flex; flex-direction: column; }
+
+.modal-content h2 {
+  font-size: var(--text-3xl);
+  margin-bottom: var(--space-sm);
+  font-family: var(--font-display);
+  color: var(--text-primary);
+}
+
+#modalSubtitle {
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-xl);
+  font-weight: 700;
+}
+
+.modal-desc {
+  color: var(--text-secondary);
+  line-height: 1.8;
+  margin-bottom: var(--space-xl);
+  flex-grow: 1;
+  font-size: var(--text-base);
+}
+
+.tag-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-2xl);
+  padding: var(--space-lg);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+}
+
+.tag-wrap span {
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-full);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-weight: 700;
+  font-size: var(--text-xs);
+  border: 1px solid var(--border-light);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.modal-links {
+  display: flex;
+  gap: var(--space-md);
+  margin-top: auto;
+}
+
+.modal-links .btn { flex: 1; justify-content: center; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .projects-grid {
+    grid-template-columns: 1fr; /* 1 per row on mobile/small */
+    gap: 16px;
+  }
+
+  .thumb {
+    height: 170px;
+    max-width: 100%;
+  }
+
+  .modal-body {
+    grid-template-columns: 1fr;
+    gap: var(--space-xl);
+    padding: var(--space-xl);
+  }
+}
+
+@media (max-width: 480px) {
+  .filters { justify-content: center; }
+
+  .filter-pill {
+    flex: 1 1 auto;
+    min-width: calc(50% - var(--space-xs));
+    text-align: center;
+    padding: var(--space-sm) var(--space-md);
+    font-size: 0.75rem;
+  }
+}

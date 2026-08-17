@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <link rel="icon" type="image/png" href="pictures/favicon.png" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Writer's Block - DB Overview</title>
+    <link rel="stylesheet" href="css/databaseView.css" />
+  </head>
+  <body>
+    <script src="js/navbar.js"></script>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden" aria-hidden="true">
+      <div class="loading-card">
+        <img class="loading-gif" src="pictures/loading.gif" alt="Loading"
+          onerror="this.style.display='none'; document.getElementById('loadingSpinner').classList.remove('hidden');" />
+        <div id="loadingSpinner" class="spinner hidden"></div>
+        <p class="loading-text">Loading data…</p>
+      </div>
+    </div>
+
+    <main class="pg-wrap">
+      <header class="pg-head">
+        <div class="pg-title">
+          <h1>DB Overview</h1>
+          <p class="sub">Monthly token usage trends + BlogData.</p>
+        </div>
+        <div class="head-actions">
+          <button id="reloadBtn" class="btn ghost">Reload</button>
+        </div>
+      </header>
+
+      <!-- CHARTS -->
+      <section class="card">
+        <div class="card-head">
+          <h3>Current Month Token Usage (Word Proxy)</h3>
+          <span id="monthLabel" class="pill">This Month</span>
+        </div>
+
+        <div class="chart-grid">
+          <div class="chart-panel">
+            <div class="chart-title">Daily Input vs Output Words</div>
+            <div id="barChart" class="chart"></div>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="dot dot-in"></span>Input (Userprompt)</span>
+              <span class="legend-item"><span class="dot dot-out"></span>Output (chatResponse)</span>
+            </div>
+          </div>
+
+          <div class="chart-panel">
+            <div class="chart-title">Cumulative Output Words</div>
+            <div id="lineChart" class="chart"></div>
+          </div>
+        </div>
+
+        <div id="chartError" class="error hidden"></div>
+      </section>
+
+      <!-- BLOGDATA TABLE -->
+      <section class="card table-card">
+        <div class="card-head">
+          <h3>BlogData</h3>
+          <span class="pill">Auto-loaded</span>
+        </div>
+
+        <div id="tablesWrap" class="tables-wrap"></div>
+        <div id="tablesError" class="error hidden"></div>
+      </section>
+    </main>
+
+    <!-- D3 -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="js/dbOverview.js"></script>
+  </body>
+</html>

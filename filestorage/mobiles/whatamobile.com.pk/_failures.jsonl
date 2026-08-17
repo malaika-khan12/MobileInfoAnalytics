@@ -1,0 +1,15 @@
+{"timestamp": "2026-08-14T11:43:43+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a41-2020-price-in-pakistan", "error": "www.whatamobile.com.pk.py must contain class WhatamobileScraper"}
+{"timestamp": "2026-08-14T11:44:07+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-8z-5g-price-in-pakistan", "error": "www.whatamobile.com.pk.py must contain class WhatamobileScraper"}
+{"timestamp": "2026-08-14T11:44:28+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a92s-5g-price-in-pakistan", "error": "www.whatamobile.com.pk.py must contain class WhatamobileScraper"}
+{"timestamp": "2026-08-14T11:44:48+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-2z-price-in-pakistan", "error": "www.whatamobile.com.pk.py must contain class WhatamobileScraper"}
+{"timestamp": "2026-08-14T11:45:09+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-ace-price-in-pakistan", "error": "www.whatamobile.com.pk.py must contain class WhatamobileScraper"}
+{"timestamp": "2026-08-14T12:38:58+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a41-2020-price-in-pakistan", "error": "Generator expression must be parenthesized (www.whatamobile.com.pk.py, line 301)"}
+{"timestamp": "2026-08-14T12:39:21+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-8z-5g-price-in-pakistan", "error": "Generator expression must be parenthesized (www.whatamobile.com.pk.py, line 301)"}
+{"timestamp": "2026-08-14T12:39:44+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a92s-5g-price-in-pakistan", "error": "Generator expression must be parenthesized (www.whatamobile.com.pk.py, line 301)"}
+{"timestamp": "2026-08-14T12:40:06+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-2z-price-in-pakistan", "error": "Generator expression must be parenthesized (www.whatamobile.com.pk.py, line 301)"}
+{"timestamp": "2026-08-14T12:40:28+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-ace-price-in-pakistan", "error": "Generator expression must be parenthesized (www.whatamobile.com.pk.py, line 301)"}
+{"timestamp": "2026-08-14T12:44:21+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a41-2020-price-in-pakistan", "error": "'str' object has no attribute 'get_text'"}
+{"timestamp": "2026-08-14T12:44:43+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-8z-5g-price-in-pakistan", "error": "'str' object has no attribute 'get_text'"}
+{"timestamp": "2026-08-14T12:45:06+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-a92s-5g-price-in-pakistan", "error": "'str' object has no attribute 'get_text'"}
+{"timestamp": "2026-08-14T12:45:30+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-2z-price-in-pakistan", "error": "'str' object has no attribute 'get_text'"}
+{"timestamp": "2026-08-14T12:45:53+00:00", "url": "https://www.whatamobile.com.pk/product/oppo-reno-ace-price-in-pakistan", "error": "'str' object has no attribute 'get_text'"}

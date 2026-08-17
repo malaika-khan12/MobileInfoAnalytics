@@ -1,5 +1,8 @@
 outputs.txt
 temperoryTestingVersion/*
-**__pycache__**/
 redmi14.html
+
 filestorage/mobiles/
+filestorage/csvs/
+
+**cache**/

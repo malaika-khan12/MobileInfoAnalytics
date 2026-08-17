@@ -1,27 +1,22 @@
 MAIN_SITE:
-https://www.gsmarena.com/search.php3?
+https://www.gsmarena.com
 
 SITES:
-https://priceoye.pk/mobiles/
-https://www.whatmobile.com.pk/
-https://www.daraz.pk/catalog/?spm=a2a0e.searchlist.cate_5.5.5b1427f2IwB4l7&q=Smart%20Phones&from=hp_categories&src=all_channel
-https://www.mega.pk/mobiles/
-https://mymobile.pk/
-https://www.whatamobile.com.pk/
-https://qeemat.com.pk/cl/smartphones
-https://asaanprice.com/
-https://qmart.pk/mobile-phones/
-https://wisemarket.com.pk/collection/mobiles/
-https://www.urdupoint.com/mobile/brands.html
-https://phonebolee.com/
-https://whatmobilepriceoye.com/
+https://mymobile.pk                                                                                                                  
+https://www.daraz.pk
+https://www.mega.pk
+https://www.whatamobile.com.pk
+https://www.whatmobile.com.pk
 
 UNAUTHORIZED_SITES:
+https://priceoye.pk/mobiles/
 https://qeemat.com.pk/cl/smartphones
 https://asaanprice.com/
 https://qmart.pk/mobile-phones/
 https://wisemarket.com.pk/collection/mobiles/
 https://www.urdupoint.com/mobile/brands.html
+https://asaanprice.com/
+https://qmart.pk/mobile-phones/
 https://phonebolee.com/
 https://whatmobilepriceoye.com/
 

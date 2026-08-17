@@ -1,0 +1,660 @@
+POSGRESQL on supabase
+
+ schema "original" -- this is for "www.gsmarena.com"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         data_snapshot    year, not null, this is extracted from the json files through regex, default=current year
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             unique text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, hence having 0 elements
+
+ schema "daraz" -- this is for "www.daraz.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null, imported as foreign key from 'central_info.serial_number'
+         data_snapshot    year, not null, default=value of 'data_snapshot' imported from 'original.central_info.data_snapshot' that corresponds to the 'product_id' from 'central_info' table
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+
+ schema "mymobile" -- this is for "mymobile.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null, imported as foreign key from 'central_info.serial_number'
+         data_snapshot    year, not null, default=value of 'data_snapshot' imported from 'original.central_info.data_snapshot' that corresponds to the 'product_id' from 'central_info' table
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+
+ schema "mega" -- this is for "www.mega.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null, imported as foreign key from 'central_info.serial_number'
+         data_snapshot    year, not null, default=value of 'data_snapshot' imported from 'original.central_info.data_snapshot' that corresponds to the 'product_id' from 'central_info' table
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+
+  schema "mymobile" -- this is for "mymobile.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+
+ schema "whatamobile" -- this is for "www.whatamobile.com.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null, imported as foreign key from 'central_info.serial_number'
+         data_snapshot    year, not null, default=value of 'data_snapshot' imported from 'original.central_info.data_snapshot' that corresponds to the 'product_id' from 'central_info' table
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+ 
+ schema "whatmobile" -- this is for "www.whatmobile.com.pk"
+     table "central_info"
+         serial_number    unique number, primary key,not null
+         product_id       number, this is foreign key imported from "original.central_info.serial_number" not null
+         instance_number  int, not null, for each "product_id" there will be a number of instances. 
+                                Like for "product_id" 1 there might be 10 instances which means 10 rows with different serial_number's 
+                                but same product_id but each row has a different "instance_number"  
+     table "secondary_info"
+         serial_number    unique number, primary key,not null, imported as foreign key from 'central_info.serial_number'
+         data_snapshot    year, not null, default=value of 'data_snapshot' imported from 'original.central_info.data_snapshot' that corresponds to the 'product_id' from 'central_info' table
+         data_snapshot_detail    date without year, not null, this is extracted from the json files through regex, default=current date without year
+         name             text, not null
+         url              unique text, not null
+         network_id       unique number, not null       
+         launch_id        unique number, not null
+         body_id          unique number, not null
+         display_id       unique number, not null
+         platform_id      unique number, not null
+         memory_id        unique number, not null
+         camera_back_id   unique number, not null
+         camera_front_id  unique number, not null
+         sound_LoudSpeaker text,can be null
+         sound_CableJack   boolean, default=true, not null
+         features_id      unique number, not null
+         battery_id       unique number, not null
+         colors           array of text, can be null due to not having any instance of text, hence having 0 elements
+         weight           text, can be null, default="Weight Unknown"
+         price            array of integers, can be null due to not having any instance of numbers, 
+                                hence having 1 element only '-1' this represents that we do not know the price
+     table "network"
+         network_id        unique number, primary key and foreign key imported from central table,not null
+         2g                boolean, default=true, not null
+         3g                boolean, default=true, not null
+         4g                boolean, default=false, not null
+         5g                boolean, default=true, not null
+     table "launch"
+         launch_id          unique number, primary key and foreign key imported from central table,not null
+         announced          text,can be null
+         status             text,can be null
+     table "body"
+         body_id            unique number, primary key and foreign key imported from central table,not null
+         dimensions         text,can be null
+         weight             text,can be null
+         build              text,can be null
+         sim                text,can be null
+         protection         text,can be null
+     table "display"
+         display_id         unique number, primary key and foreign key imported from central table,not null
+         type               text,can be null
+         size               text,can be null
+         resolution         text,can be null
+         protection         text,can be null
+     table "platform"
+         platform_id        unique number, primary key and foreign key imported from central table,not null
+         os                 text,can be null
+         chipset            text,can be null
+         cpu                text,can be null
+         gpu                text,can be null
+     table "memory"
+         memory_id          unique number, primary key and foreign key imported from central table,not null
+         card_slot          text,can be null
+         technology         text,can be null
+         types              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_back"
+         camera_back_id     unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+     table "camera_front"
+         camera_front_id    unique number, primary key and foreign key imported from central table,not null
+         specifications     array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+         features           text,can be null
+         video              array of text, can be null due to not having any instance of text, hence having 0 elements
+     table "features"
+         features_id        unique number, primary key and foreign key imported from central table,not null
+         wlan               text,can be null
+         bluetooth          text,can be null
+         positioning        text,can be null
+         nfc                boolean, default=false, not null
+         infrared_port      boolean, default=false, not null
+         radio              boolean, default=true, not null
+         usb                text,can be null
+         back_finger_print  boolean, default=false, not null
+         side_finger_print  boolean, default=false, not null
+         in_display_finger_print boolean, default=false, not null
+         sensors            text,can be null
+     table "battery"
+         battery_id         unique number, primary key and foreign key imported from central table,not null
+         wireless_charging  boolean, default=false, not null
+         charging           array of text, can be null due to not having any instance of text, 
+                                hence having 0 elements
+

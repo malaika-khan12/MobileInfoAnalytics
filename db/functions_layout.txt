@@ -1,0 +1,7 @@
+POSGRESQL on supabase
+
+-- the functions that i need are to be such that they help in:
+--      filling data into tables from json files. Different filling functions for different schemas
+--      functions that help in extraction of data for gaining insights into prices and differences between different sites
+--      functions that help in maintaining data and extracting data that is complete instead of incomplete
+--      other functions for other purposes

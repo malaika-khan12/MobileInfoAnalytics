@@ -1,5 +1,4 @@
-"""
-Cross-platform Playwright navigation and batch crawling for GSMArena.
+"""Cross-platform, resumable, rate-limit-aware GSMArena scraper.
 
 This module keeps the original single-URL smoke-test interface while adding a
 production manifest modes.  It runs unchanged on native Windows and Linux/WSL.
@@ -19,11 +18,13 @@ Small resumable crawl (1-based, inclusive phone positions):
     python backend/navigation_to_page/www.gsmarena.com.py \
         --min 1 --max 5
 
-Full resumable crawl:
+Resumable crawl (the safety policy intentionally stops each process after a
+small session; rerun the same command and completed files are skipped):
 
     python backend/navigation_to_page/www.gsmarena.com.py --min 1
 
-Catalog traversal matching the visible browser workflow:
+Catalog traversal is retained for diagnostics, but direct manifest mode is the
+default because it needs fewer requests:
 
     python backend/navigation_to_page/www.gsmarena.com.py \
         "https://www.gsmarena.com/xiaomi-phones-80.php" --min 1 --max 5 --headed
@@ -37,6 +38,20 @@ Pagination is followed automatically. Existing valid files are skipped unless
 ``--force`` is supplied. Final failures are appended to ``_failures.jsonl`` and
 every run writes ``_crawl_summary.json``.
 
+The crawler deliberately makes one document request at a time and blocks every
+subresource. It uses one stable browser session, persists request history and
+server cooldowns in ``_request_policy.json``, prevents concurrent crawler
+processes with ``_crawl.lock``, and stops immediately on HTTP 403/429/503 or a
+recognizable block page. A server ``Retry-After`` value is honored in full plus
+a small safety buffer; it is never capped to a shorter wait. Proxy rotation,
+identity rotation, and asset-loading crawl modes are intentionally disabled.
+
+No client-side setting can guarantee that a third-party site will allow an
+automated crawl. Obtain permission and check the site's current terms and
+robots rules before use. If the server refuses traffic, leave the crawler
+stopped until the recorded UTC resume time rather than changing networks or
+trying to bypass the refusal.
+
 When neither a positional URL nor ``--sitemap`` is supplied, the script uses
 ``filestorage/sitemap_mobile/gsmarena.com.json`` automatically. ``--min`` and
 ``--max`` therefore form the complete normal Windows batch interface. Ranges
@@ -49,18 +64,21 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from email.utils import parsedate_to_datetime
 import importlib.util
 import json
 import logging
+import math
 import os
 import random
 import re
+import socket
 import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Iterator, List, Optional, Sequence
 from urllib.parse import unquote, urljoin, urlparse
 
 log = logging.getLogger("gsmarena.navigator")
@@ -68,6 +86,25 @@ log = logging.getLogger("gsmarena.navigator")
 DEFAULT_MANIFEST = "filestorage/sitemap_mobile/gsmarena.com.json"
 DEFAULT_OUTPUT_DIR = "filestorage/mobiles/gsmarena.com"
 DEFAULT_WAIT_SELECTOR = "#specs-list"
+
+# These are safeguards, not statements about GSMArena's unpublished limits.
+# The previous 15--25 second pace generated at least 144 top-level requests per
+# hour, before browser subresources, and received a ten-hour Retry-After. The
+# new defaults are intentionally much slower and may only be made stricter from
+# the CLI.
+MINIMUM_ALLOWED_DELAY_SECONDS = 60.0
+DEFAULT_DELAY_MIN_SECONDS = 60.0
+DEFAULT_DELAY_MAX_SECONDS = 61.0
+MAX_HOURLY_REQUESTS = 600
+MAX_DAILY_REQUESTS = 12000
+MAX_SESSION_REQUESTS = 500
+DEFAULT_429_COOLDOWN_SECONDS = 24 * 60 * 60
+DEFAULT_403_COOLDOWN_SECONDS = 24 * 60 * 60
+DEFAULT_503_COOLDOWN_SECONDS = 60 * 60
+SERVER_COOLDOWN_BUFFER_SECONDS = 5 * 60
+POLICY_STATE_FILENAME = "_request_policy.json"
+CRAWL_LOCK_FILENAME = "_crawl.lock"
+POLICY_STOP_EXIT_CODE = 75
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST_PATH = PROJECT_ROOT / DEFAULT_MANIFEST
@@ -194,112 +231,111 @@ def import_playwright() -> tuple[Any, type[BaseException], type[BaseException]]:
     return sync_playwright, Error, TimeoutError
 
 
-def parse_proxy(value: str) -> dict:
+def epoch_to_utc(value: float) -> str:
+    return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds")
+
+
+def utc_to_epoch(value: str) -> float:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def parse_retry_after(value: Optional[str], now_epoch: Optional[float] = None) -> Optional[int]:
+    """Parse either legal Retry-After representation into whole seconds."""
+    if value is None:
+        return None
     candidate = value.strip()
     if not candidate:
-        raise ValueError("Proxy value cannot be empty")
-    if "://" not in candidate:
-        candidate = f"http://{candidate}"
-
-    parsed = urlparse(candidate)
-    if not parsed.hostname or not parsed.port:
-        raise ValueError(
-            f"Invalid proxy {value!r}; expected host:port or scheme://host:port"
-        )
-    proxy: dict[str, str] = {
-        "server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
-    }
-    if parsed.username:
-        proxy["username"] = unquote(parsed.username)
-    if parsed.password:
-        proxy["password"] = unquote(parsed.password)
-    return proxy
+        return None
+    if candidate.isdecimal():
+        return int(candidate)
+    try:
+        parsed = parsedate_to_datetime(candidate)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    now = time.time() if now_epoch is None else now_epoch
+    return max(0, math.ceil(parsed.timestamp() - now))
 
 
-def load_proxies(values: Sequence[str], proxy_file: Optional[Path]) -> List[dict]:
-    raw_values = list(values)
-    if proxy_file is not None:
-        try:
-            for line in proxy_file.read_text(encoding="utf-8-sig").splitlines():
-                stripped = line.strip()
-                if stripped and not stripped.startswith("#"):
-                    raw_values.append(stripped)
-        except OSError as exc:
-            raise ValueError(f"Could not read proxy file {proxy_file}: {exc}") from exc
-    return [parse_proxy(value) for value in raw_values]
-
-
-class GsmarenaEvasion:
-    """Request identity, optional user-supplied proxy rotation, and throttling."""
-
-    USER_AGENTS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 "
-        "Safari/537.36 Edg/151.0.0.0",
-    ]
+class CrawlPolicyStop(RuntimeError):
+    """A deliberate stop that must not be retried as a scrape failure."""
 
     def __init__(
         self,
-        proxies: Optional[Sequence[dict]] = None,
-        minimum_delay: float = 2.0,
-        maximum_delay: float = 5.0,
+        message: str,
+        *,
+        reason: str,
+        resume_at: Optional[str] = None,
+        status: Optional[int] = None,
+        retry_after_seconds: Optional[int] = None,
     ) -> None:
-        if minimum_delay < 0 or maximum_delay < minimum_delay:
-            raise ValueError("Delay range must satisfy 0 <= minimum <= maximum")
-        self.proxies = list(proxies or [])
-        self.minimum_delay = minimum_delay
-        self.maximum_delay = maximum_delay
+        super().__init__(message)
+        self.reason = reason
+        self.resume_at = resume_at
+        self.status = status
+        self.retry_after_seconds = retry_after_seconds
 
-    def random_user_agent(self) -> str:
-        return random.choice(self.USER_AGENTS)
 
-    def random_proxy(self) -> Optional[dict]:
-        return random.choice(self.proxies) if self.proxies else None
-
-    def polite_delay(self) -> None:
-        if self.maximum_delay:
-            time.sleep(random.uniform(self.minimum_delay, self.maximum_delay))
+class HttpStatusError(RuntimeError):
+    def __init__(self, status: int, url: str) -> None:
+        super().__init__(f"HTTP {status} while loading {url}")
+        self.status = status
 
 
 class GsmarenaNavigator:
     """Own a Playwright browser and scrape GSMArena specification pages."""
 
-    BLOCKED_RESOURCE_TYPES = {"font", "image", "media"}
+    ALLOWED_RESOURCE_TYPES = {"document"}
+    BLOCK_PAGE_MARKERS = (
+        "too many requests",
+        "rate limit exceeded",
+        "your ip has been blocked",
+        "your ip address has been blocked",
+        "access to this page has been denied",
+        "temporarily blocked",
+        "checking your browser before accessing",
+    )
 
     def __init__(
         self,
-        evasion: Optional[GsmarenaEvasion] = None,
         headless: bool = True,
         navigation_timeout_ms: int = 30_000,
         selector_timeout_ms: int = 15_000,
-        block_assets: bool = True,
+        request_policy: Optional[PersistentRequestPolicy] = None,
     ) -> None:
-        self.evasion = evasion or GsmarenaEvasion()
         self.headless = headless
         self.navigation_timeout_ms = navigation_timeout_ms
         self.selector_timeout_ms = selector_timeout_ms
-        self.block_assets = block_assets
+        self.request_policy = request_policy
         self._playwright_manager: Any = None
         self._browser: Any = None
+        self._direct_context: Any = None
+        self._direct_page: Any = None
         self._playwright_error: type[BaseException] = Exception
         self._playwright_timeout: type[BaseException] = Exception
 
     def start(self) -> "GsmarenaNavigator":
         if self._playwright_manager is not None:
             return self
-        sync_playwright, error_type, timeout_type = import_playwright()
-        self._playwright_error = error_type
-        self._playwright_timeout = timeout_type
-        self._playwright_manager = sync_playwright().start()
         try:
+            if self.request_policy is not None:
+                self.request_policy.acquire()
+                self.request_policy.assert_can_start()
+            sync_playwright, error_type, timeout_type = import_playwright()
+            self._playwright_error = error_type
+            self._playwright_timeout = timeout_type
+            self._playwright_manager = sync_playwright().start()
             self._launch_browser()
         except Exception:
-            self._playwright_manager.stop()
+            if self._playwright_manager is not None:
+                self._playwright_manager.stop()
             self._playwright_manager = None
+            if self.request_policy is not None:
+                self.request_policy.release()
             raise
         return self
 
@@ -311,6 +347,7 @@ class GsmarenaNavigator:
         )
 
     def restart_browser(self) -> None:
+        self._close_direct_session()
         if self._browser is not None:
             try:
                 self._browser.close()
@@ -319,17 +356,36 @@ class GsmarenaNavigator:
         self._browser = None
         self._launch_browser()
 
+    def _close_direct_session(self) -> None:
+        self._direct_page = None
+        if self._direct_context is not None:
+            try:
+                self._direct_context.close()
+            except Exception:
+                pass
+            finally:
+                self._direct_context = None
+
     def close(self) -> None:
-        if self._browser is not None:
-            try:
-                self._browser.close()
-            finally:
-                self._browser = None
-        if self._playwright_manager is not None:
-            try:
-                self._playwright_manager.stop()
-            finally:
-                self._playwright_manager = None
+        try:
+            self._close_direct_session()
+            if self._browser is not None:
+                try:
+                    self._browser.close()
+                except Exception:
+                    pass
+                finally:
+                    self._browser = None
+            if self._playwright_manager is not None:
+                try:
+                    self._playwright_manager.stop()
+                except Exception:
+                    pass
+                finally:
+                    self._playwright_manager = None
+        finally:
+            if self.request_policy is not None:
+                self.request_policy.release()
 
     def __enter__(self) -> "GsmarenaNavigator":
         return self.start()
@@ -338,18 +394,14 @@ class GsmarenaNavigator:
         self.close()
 
     def new_context(self) -> Any:
-        """Create an isolated browser context for one direct request or maker."""
+        """Create one stable browser context for a direct run or one maker."""
         if self._browser is None:
             raise RuntimeError("Browser is not running")
         context_options: dict[str, Any] = {
-            "user_agent": self.evasion.random_user_agent(),
             "locale": "en-US",
             "viewport": {"width": 1366, "height": 900},
             "service_workers": "block",
         }
-        proxy = self.evasion.random_proxy()
-        if proxy:
-            context_options["proxy"] = proxy
         return self._browser.new_context(**context_options)
 
     # Backward-compatible private name used by the first implementation.
@@ -358,16 +410,143 @@ class GsmarenaNavigator:
 
     @classmethod
     def _route_request(cls, route: Any) -> None:
-        if route.request.resource_type in cls.BLOCKED_RESOURCE_TYPES:
-            route.abort()
-        else:
+        request = route.request
+        same_site = canonical_site(request.url) == "gsmarena.com"
+        is_main_document = False
+        if request.resource_type in cls.ALLOWED_RESOURCE_TYPES and same_site:
+            try:
+                is_main_document = request.frame.parent_frame is None
+            except Exception:
+                # Some test doubles and older Playwright releases do not expose
+                # the frame relationship. A same-site document remains the only
+                # allowed resource in that case.
+                is_main_document = True
+        if is_main_document:
             route.continue_()
+        else:
+            route.abort("blockedbyclient")
 
     def new_page(self, context: Any) -> Any:
         page = context.new_page()
-        if self.block_assets:
-            page.route("**/*", self._route_request)
+        page.route("**/*", self._route_request)
         return page
+
+    @staticmethod
+    def _response_header(response: Any, name: str) -> Optional[str]:
+        if response is None:
+            return None
+        try:
+            headers = response.headers
+            if callable(headers):
+                headers = headers()
+            if isinstance(headers, dict):
+                value = headers.get(name.lower()) or headers.get(name)
+                if value is not None:
+                    return str(value)
+        except Exception:
+            pass
+        try:
+            value = response.header_value(name)
+            return str(value) if value is not None else None
+        except Exception:
+            return None
+
+    def _before_request(self, url: str, kind: str) -> None:
+        if self.request_policy is not None:
+            self.request_policy.before_request(url=url, kind=kind)
+
+    def _raise_server_stop(
+        self,
+        *,
+        url: str,
+        status: Optional[int],
+        retry_after_seconds: Optional[int],
+        reason: str,
+    ) -> None:
+        if self.request_policy is not None:
+            resume_at = self.request_policy.record_server_stop(
+                url=url,
+                status=status,
+                retry_after_seconds=retry_after_seconds,
+                reason=reason,
+            )
+        else:
+            if retry_after_seconds is not None:
+                cooldown = retry_after_seconds
+            elif status == 429:
+                cooldown = DEFAULT_429_COOLDOWN_SECONDS
+            elif status == 403:
+                cooldown = DEFAULT_403_COOLDOWN_SECONDS
+            else:
+                cooldown = DEFAULT_503_COOLDOWN_SECONDS
+            resume_at = epoch_to_utc(
+                time.time() + cooldown + SERVER_COOLDOWN_BUFFER_SECONDS
+            )
+
+        status_text = f"HTTP {status}" if status is not None else "block page"
+        retry_text = (
+            f"; server Retry-After={retry_after_seconds}s"
+            if retry_after_seconds is not None
+            else ""
+        )
+        raise CrawlPolicyStop(
+            f"GSMArena returned {status_text}{retry_text}. No retry was made. "
+            f"Crawler cooldown is persisted until {resume_at} UTC.",
+            reason=reason,
+            resume_at=resume_at,
+            status=status,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+    def _guard_response(self, response: Any, url: str) -> None:
+        if response is None:
+            return
+        status = int(response.status)
+        if status in {403, 429, 503}:
+            policy_clock = getattr(self.request_policy, "clock", None)
+            now_epoch = policy_clock() if callable(policy_clock) else None
+            retry_after = parse_retry_after(
+                self._response_header(response, "retry-after"),
+                now_epoch=now_epoch,
+            )
+            self._raise_server_stop(
+                url=url,
+                status=status,
+                retry_after_seconds=retry_after,
+                reason=f"http_{status}",
+            )
+        if status >= 400:
+            raise HttpStatusError(status, url)
+
+    def _guard_block_page(self, page: Any, url: str, expected_selector: str) -> None:
+        """Recognize refusal pages that are returned with an HTTP 200 status."""
+        try:
+            if page.query_selector(expected_selector) is not None:
+                return
+        except Exception:
+            pass
+
+        body_text = ""
+        try:
+            body_text = page.locator("body").inner_text(timeout=2_000)
+        except Exception:
+            try:
+                body_text = page.content()
+            except Exception:
+                return
+        normalized = re.sub(r"\s+", " ", body_text).strip().lower()
+        if any(marker in normalized for marker in self.BLOCK_PAGE_MARKERS):
+            self._raise_server_stop(
+                url=url,
+                status=None,
+                retry_after_seconds=None,
+                reason="block_page",
+            )
+
+    def is_retryable_error(self, error: BaseException) -> bool:
+        if isinstance(error, (CrawlPolicyStop, HttpStatusError, ValueError)):
+            return False
+        return isinstance(error, (self._playwright_error, self._playwright_timeout))
 
     def scrape_product_on_page(
         self,
@@ -383,21 +562,24 @@ class GsmarenaNavigator:
         if gsmarena_product_match(url) is None:
             raise ValueError(f"Not a recognized GSMArena product URL: {url}")
 
-        try:
-            response = page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=self.navigation_timeout_ms,
+        self._before_request(url, "product")
+        response = page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=self.navigation_timeout_ms,
+        )
+        self._guard_response(response, url)
+        self._guard_block_page(page, url, wait_selector)
+        page.wait_for_selector(wait_selector, timeout=self.selector_timeout_ms)
+        final_url = page.url
+        if canonical_site(final_url) != "gsmarena.com":
+            self._raise_server_stop(
+                url=url,
+                status=None,
+                retry_after_seconds=None,
+                reason="unexpected_redirect",
             )
-            if response is not None and response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status} while loading {url}")
-            page.wait_for_selector(wait_selector, timeout=self.selector_timeout_ms)
-            final_url = page.url
-            if canonical_site(final_url) != "gsmarena.com":
-                raise RuntimeError(f"Unexpected redirect from {url} to {final_url}")
-            html = page.content()
-        finally:
-            self.evasion.polite_delay()
+        html = page.content()
 
         scraper_class = load_scraper_class()
         scraper = scraper_class(html, source_url=url)
@@ -420,31 +602,34 @@ class GsmarenaNavigator:
                 f"Catalog page {url!r} does not belong to maker {expected_identity}"
             )
 
-        try:
-            response = page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=self.navigation_timeout_ms,
+        self._before_request(url, "catalog")
+        response = page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=self.navigation_timeout_ms,
+        )
+        self._guard_response(response, url)
+        self._guard_block_page(page, url, ".makers a[href]")
+        page.wait_for_selector(
+            ".makers a[href]",
+            timeout=self.selector_timeout_ms,
+        )
+        if canonical_site(page.url) != "gsmarena.com":
+            self._raise_server_stop(
+                url=url,
+                status=None,
+                retry_after_seconds=None,
+                reason="unexpected_redirect",
             )
-            if response is not None and response.status >= 400:
-                raise RuntimeError(f"HTTP {response.status} while loading {url}")
-            page.wait_for_selector(
-                ".makers a[href]",
-                timeout=self.selector_timeout_ms,
-            )
-            if canonical_site(page.url) != "gsmarena.com":
-                raise RuntimeError(f"Unexpected redirect from {url} to {page.url}")
 
-            product_hrefs = page.eval_on_selector_all(
-                ".makers a[href]",
-                "elements => elements.map(element => element.getAttribute('href'))",
-            )
-            pagination_hrefs = page.eval_on_selector_all(
-                ".nav-pages a[href], a.pages-next[href], a.pages-prev[href]",
-                "elements => elements.map(element => element.getAttribute('href'))",
-            )
-        finally:
-            self.evasion.polite_delay()
+        product_hrefs = page.eval_on_selector_all(
+            ".makers a[href]",
+            "elements => elements.map(element => element.getAttribute('href'))",
+        )
+        pagination_hrefs = page.eval_on_selector_all(
+            ".nav-pages a[href], a.pages-next[href], a.pages-prev[href]",
+            "elements => elements.map(element => element.getAttribute('href'))",
+        )
 
         products: List[str] = []
         product_seen: set[str] = set()
@@ -487,13 +672,10 @@ class GsmarenaNavigator:
         if gsmarena_product_match(url) is None:
             raise ValueError(f"Not a recognized GSMArena product URL: {url}")
 
-        context = self.new_context()
-        page = self.new_page(context)
-
-        try:
-            return self.scrape_product_on_page(page, url, wait_selector)
-        finally:
-            context.close()
+        if self._direct_context is None:
+            self._direct_context = self.new_context()
+            self._direct_page = self.new_page(self._direct_context)
+        return self.scrape_product_on_page(self._direct_page, url, wait_selector)
 
     def fetch_many(
         self,
@@ -663,6 +845,389 @@ def atomic_write_json(path: Path, payload: Any) -> None:
             temporary.unlink()
 
 
+class PersistentRequestPolicy:
+    """Persist spacing, budgets, cooldowns, and a single-process lease.
+
+    The state lives beside the scraped JSON so restarting the script does not
+    reset its memory of recent requests. All limits count top-level document
+    navigations, including failed attempts and catalog pages.
+    """
+
+    VERSION = 1
+
+    def __init__(
+        self,
+        output_dir: Path,
+        *,
+        minimum_delay: float = DEFAULT_DELAY_MIN_SECONDS,
+        maximum_delay: float = DEFAULT_DELAY_MAX_SECONDS,
+        hourly_limit: int = MAX_HOURLY_REQUESTS,
+        daily_limit: int = MAX_DAILY_REQUESTS,
+        session_limit: int = MAX_SESSION_REQUESTS,
+        clear_stale_lock: bool = False,
+        clock: Callable[[], float] = time.time,
+        sleeper: Callable[[float], None] = time.sleep,
+        uniform: Callable[[float, float], float] = random.uniform,
+    ) -> None:
+        if minimum_delay < MINIMUM_ALLOWED_DELAY_SECONDS:
+            raise ValueError(
+                f"minimum delay must be at least {MINIMUM_ALLOWED_DELAY_SECONDS:g}s"
+            )
+        if maximum_delay < minimum_delay:
+            raise ValueError("maximum delay must be >= minimum delay")
+        if not 1 <= hourly_limit <= MAX_HOURLY_REQUESTS:
+            raise ValueError(
+                f"hourly limit must be between 1 and {MAX_HOURLY_REQUESTS}"
+            )
+        if not 1 <= daily_limit <= MAX_DAILY_REQUESTS:
+            raise ValueError(
+                f"daily limit must be between 1 and {MAX_DAILY_REQUESTS}"
+            )
+        if not 1 <= session_limit <= MAX_SESSION_REQUESTS:
+            raise ValueError(
+                f"session limit must be between 1 and {MAX_SESSION_REQUESTS}"
+            )
+
+        self.output_dir = output_dir
+        self.state_path = output_dir / POLICY_STATE_FILENAME
+        self.lock_path = output_dir / CRAWL_LOCK_FILENAME
+        self.minimum_delay = minimum_delay
+        self.maximum_delay = maximum_delay
+        self.hourly_limit = hourly_limit
+        self.daily_limit = daily_limit
+        self.session_limit = session_limit
+        self.clear_stale_lock = clear_stale_lock
+        self.clock = clock
+        self.sleeper = sleeper
+        self.uniform = uniform
+        self.session_requests = 0
+        self._lock_held = False
+
+    def acquire(self) -> None:
+        if self._lock_held:
+            return
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.clear_stale_lock:
+            self.lock_path.unlink(missing_ok=True)
+            self.clear_stale_lock = False
+
+        payload = {
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "started_at": epoch_to_utc(self.clock()),
+        }
+        try:
+            descriptor = os.open(
+                self.lock_path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+        except FileExistsError as exc:
+            try:
+                owner = self.lock_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                owner = "owner details unavailable"
+            raise CrawlPolicyStop(
+                "Another GSMArena crawler may be active. Concurrent crawlers "
+                f"are disabled by {self.lock_path}. Owner: {owner}. If a prior "
+                "process crashed, verify it is stopped and rerun once with "
+                "--clear-stale-lock.",
+                reason="concurrent_crawler",
+            ) from exc
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        self._lock_held = True
+
+    def release(self) -> None:
+        if not self._lock_held:
+            return
+        try:
+            self.lock_path.unlink(missing_ok=True)
+        finally:
+            self._lock_held = False
+
+    def _empty_state(self) -> dict[str, Any]:
+        return {
+            "version": self.VERSION,
+            "site": "gsmarena.com",
+            "updated_at": epoch_to_utc(self.clock()),
+            "request_times_utc": [],
+            "cooldown_until": None,
+            "last_server_stop": None,
+            "last_policy_stop": None,
+            "limits": {},
+        }
+
+    def _load_state(self) -> dict[str, Any]:
+        if not self.state_path.exists():
+            return self._empty_state()
+        try:
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CrawlPolicyStop(
+                f"Request-policy state is unreadable: {self.state_path}: {exc}. "
+                "The crawler stopped instead of forgetting its rate history.",
+                reason="invalid_policy_state",
+            ) from exc
+        if not isinstance(state, dict) or state.get("version") != self.VERSION:
+            raise CrawlPolicyStop(
+                f"Unsupported request-policy state in {self.state_path}; "
+                "the crawler stopped instead of resetting it.",
+                reason="invalid_policy_state",
+            )
+        return state
+
+    def _request_times(self, state: dict[str, Any]) -> List[float]:
+        values = state.get("request_times_utc", [])
+        if not isinstance(values, list):
+            raise CrawlPolicyStop(
+                f"Invalid request history in {self.state_path}",
+                reason="invalid_policy_state",
+            )
+        parsed: List[float] = []
+        try:
+            for value in values:
+                parsed.append(utc_to_epoch(str(value)))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CrawlPolicyStop(
+                f"Invalid request timestamp in {self.state_path}",
+                reason="invalid_policy_state",
+            ) from exc
+        return sorted(parsed)
+
+    def _write_state(self, state: dict[str, Any], request_times: Sequence[float]) -> None:
+        state["version"] = self.VERSION
+        state["site"] = "gsmarena.com"
+        state["updated_at"] = epoch_to_utc(self.clock())
+        state["request_times_utc"] = [epoch_to_utc(item) for item in request_times]
+        state["limits"] = {
+            "minimum_delay_seconds": self.minimum_delay,
+            "maximum_delay_seconds": self.maximum_delay,
+            "hourly_requests": self.hourly_limit,
+            "daily_requests": self.daily_limit,
+            "session_requests": self.session_limit,
+        }
+        atomic_write_json(self.state_path, state)
+
+    @staticmethod
+    def _cooldown_epoch(state: dict[str, Any]) -> Optional[float]:
+        value = state.get("cooldown_until")
+        if value in (None, ""):
+            return None
+        try:
+            return utc_to_epoch(str(value))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise CrawlPolicyStop(
+                "Invalid cooldown timestamp in the request-policy state",
+                reason="invalid_policy_state",
+            ) from exc
+
+    def _persist_policy_pause(
+        self,
+        state: dict[str, Any],
+        request_times: Sequence[float],
+        *,
+        reason: str,
+        resume_epoch: float,
+    ) -> str:
+        existing = self._cooldown_epoch(state)
+        effective = max(resume_epoch, existing or 0.0)
+        resume_at = epoch_to_utc(effective)
+        state["cooldown_until"] = resume_at
+        state["last_policy_stop"] = {
+            "reason": reason,
+            "observed_at": epoch_to_utc(self.clock()),
+            "resume_at": resume_at,
+        }
+        self._write_state(state, request_times)
+        return resume_at
+
+    def before_request(self, *, url: str, kind: str) -> None:
+        if not self._lock_held:
+            raise RuntimeError("Request policy must hold the crawl lock")
+
+        now = self.clock()
+        state = self._load_state()
+        request_times = [
+            item for item in self._request_times(state) if item > now - 86_400
+        ]
+
+        cooldown_epoch = self._cooldown_epoch(state)
+        if cooldown_epoch is not None and cooldown_epoch > now:
+            resume_at = epoch_to_utc(cooldown_epoch)
+            raise CrawlPolicyStop(
+                f"GSMArena cooldown is active until {resume_at} UTC. No network "
+                "request was made.",
+                reason="cooldown_active",
+                resume_at=resume_at,
+            )
+        if cooldown_epoch is not None:
+            state["cooldown_until"] = None
+
+        if self.session_requests >= self.session_limit:
+            self._write_state(state, request_times)
+            raise CrawlPolicyStop(
+                f"Safe session limit ({self.session_limit} document requests) "
+                "reached. Completed files are preserved; rerun the same command "
+                "later to resume.",
+                reason="session_limit",
+            )
+
+        hourly = [item for item in request_times if item > now - 3_600]
+        if len(hourly) >= self.hourly_limit:
+            resume_at = self._persist_policy_pause(
+                state,
+                request_times,
+                reason="hourly_limit",
+                resume_epoch=hourly[0] + 3_600 + 60,
+            )
+            raise CrawlPolicyStop(
+                f"Safe hourly limit ({self.hourly_limit}) reached; no request "
+                f"was made. Resume after {resume_at} UTC.",
+                reason="hourly_limit",
+                resume_at=resume_at,
+            )
+
+        if len(request_times) >= self.daily_limit:
+            resume_at = self._persist_policy_pause(
+                state,
+                request_times,
+                reason="daily_limit",
+                resume_epoch=request_times[0] + 86_400 + 60,
+            )
+            raise CrawlPolicyStop(
+                f"Safe daily limit ({self.daily_limit}) reached; no request was "
+                f"made. Resume after {resume_at} UTC.",
+                reason="daily_limit",
+                resume_at=resume_at,
+            )
+
+        if request_times:
+            required_gap = self.uniform(self.minimum_delay, self.maximum_delay)
+            wait_seconds = max(0.0, request_times[-1] + required_gap - now)
+            if wait_seconds > 0:
+                log.info(
+                    "Rate policy: waiting %.1fs before next document request",
+                    wait_seconds,
+                )
+                self.sleeper(wait_seconds)
+                now = self.clock()
+                request_times = [
+                    item for item in request_times if item > now - 86_400
+                ]
+
+        request_times.append(now)
+        self.session_requests += 1
+        state["last_request"] = {
+            "timestamp": epoch_to_utc(now),
+            "kind": kind,
+            "url": url,
+            "session_position": self.session_requests,
+        }
+        self._write_state(state, request_times)
+        log.info(
+            "Rate policy: request %d/%d this session (%d/%d last hour, %d/%d last day)",
+            self.session_requests,
+            self.session_limit,
+            len([item for item in request_times if item > now - 3_600]),
+            self.hourly_limit,
+            len(request_times),
+            self.daily_limit,
+        )
+
+    def assert_can_start(self) -> None:
+        """Refuse a known cooldown/budget before Playwright is launched."""
+        if not self._lock_held:
+            raise RuntimeError("Request policy must hold the crawl lock")
+        now = self.clock()
+        state = self._load_state()
+        request_times = [
+            item for item in self._request_times(state) if item > now - 86_400
+        ]
+        cooldown_epoch = self._cooldown_epoch(state)
+        if cooldown_epoch is not None and cooldown_epoch > now:
+            resume_at = epoch_to_utc(cooldown_epoch)
+            raise CrawlPolicyStop(
+                f"GSMArena cooldown is active until {resume_at} UTC. Playwright "
+                "was not opened and no network request was made.",
+                reason="cooldown_active",
+                resume_at=resume_at,
+            )
+        if cooldown_epoch is not None:
+            state["cooldown_until"] = None
+
+        hourly = [item for item in request_times if item > now - 3_600]
+        if len(hourly) >= self.hourly_limit:
+            resume_at = self._persist_policy_pause(
+                state,
+                request_times,
+                reason="hourly_limit",
+                resume_epoch=hourly[0] + 3_600 + 60,
+            )
+            raise CrawlPolicyStop(
+                f"Safe hourly limit ({self.hourly_limit}) is still active; "
+                f"Playwright was not opened. Resume after {resume_at} UTC.",
+                reason="hourly_limit",
+                resume_at=resume_at,
+            )
+        if len(request_times) >= self.daily_limit:
+            resume_at = self._persist_policy_pause(
+                state,
+                request_times,
+                reason="daily_limit",
+                resume_epoch=request_times[0] + 86_400 + 60,
+            )
+            raise CrawlPolicyStop(
+                f"Safe daily limit ({self.daily_limit}) is still active; "
+                f"Playwright was not opened. Resume after {resume_at} UTC.",
+                reason="daily_limit",
+                resume_at=resume_at,
+            )
+
+        self._write_state(state, request_times)
+
+    def record_server_stop(
+        self,
+        *,
+        url: str,
+        status: Optional[int],
+        retry_after_seconds: Optional[int],
+        reason: str,
+    ) -> str:
+        now = self.clock()
+        state = self._load_state()
+        request_times = [
+            item for item in self._request_times(state) if item > now - 86_400
+        ]
+        if retry_after_seconds is not None:
+            cooldown_seconds = retry_after_seconds
+        elif status == 429:
+            cooldown_seconds = DEFAULT_429_COOLDOWN_SECONDS
+        elif status == 403 or status is None:
+            cooldown_seconds = DEFAULT_403_COOLDOWN_SECONDS
+        else:
+            cooldown_seconds = DEFAULT_503_COOLDOWN_SECONDS
+
+        existing = self._cooldown_epoch(state)
+        resume_epoch = max(
+            existing or 0.0,
+            now + cooldown_seconds + SERVER_COOLDOWN_BUFFER_SECONDS,
+        )
+        resume_at = epoch_to_utc(resume_epoch)
+        state["cooldown_until"] = resume_at
+        state["last_server_stop"] = {
+            "observed_at": epoch_to_utc(now),
+            "reason": reason,
+            "status": status,
+            "url": url,
+            "retry_after_seconds": retry_after_seconds,
+            "safety_buffer_seconds": SERVER_COOLDOWN_BUFFER_SECONDS,
+            "resume_at": resume_at,
+        }
+        self._write_state(state, request_times)
+        return resume_at
+
+
 def valid_existing_output(path: Path) -> bool:
     if not path.is_file():
         return False
@@ -704,11 +1269,27 @@ class CrawlStats:
     succeeded: int = 0
     failed: int = 0
     interrupted: bool = False
+    policy_stopped: bool = False
+    policy_stop_reason: Optional[str] = None
+    policy_resume_at: Optional[str] = None
+    server_status: Optional[int] = None
+    retry_after_seconds: Optional[int] = None
+    document_requests_this_run: int = 0
 
 
-def retry_backoff(attempt_number: int) -> None:
-    delay = min(30.0, (2.0**attempt_number) + random.uniform(0.0, 1.0))
-    time.sleep(delay)
+def mark_policy_stop(stats: CrawlStats, error: CrawlPolicyStop) -> None:
+    stats.policy_stopped = True
+    stats.policy_stop_reason = error.reason
+    stats.policy_resume_at = error.resume_at
+    stats.server_status = error.status
+    stats.retry_after_seconds = error.retry_after_seconds
+
+
+def navigator_allows_retry(navigator: Any, error: BaseException) -> bool:
+    checker = getattr(navigator, "is_retryable_error", None)
+    if checker is None:
+        return not isinstance(error, (CrawlPolicyStop, HttpStatusError, ValueError))
+    return bool(checker(error))
 
 
 def resolve_phone_range(
@@ -816,6 +1397,8 @@ def crawl_manifest(
                         break
                     except KeyboardInterrupt:
                         raise
+                    except CrawlPolicyStop:
+                        raise
                     except Exception as exc:
                         last_error = exc
                         log.warning(
@@ -825,12 +1408,16 @@ def crawl_manifest(
                             url,
                             exc,
                         )
-                        if attempt < maximum_attempts:
+                        if (
+                            attempt < maximum_attempts
+                            and navigator_allows_retry(navigator, exc)
+                        ):
                             try:
                                 navigator.restart_browser()
                             except Exception as restart_exc:
                                 log.warning("Browser restart failed: %s", restart_exc)
-                            retry_backoff(attempt)
+                        else:
+                            break
 
                 if last_error is not None:
                     stats.failed += 1
@@ -845,22 +1432,33 @@ def crawl_manifest(
                             "error": str(last_error),
                         },
                     )
+    except CrawlPolicyStop as exc:
+        mark_policy_stop(stats, exc)
+        log.warning("SAFE STOP: %s", exc)
     except KeyboardInterrupt:
         stats.interrupted = True
         log.warning("Interrupted; completed files are preserved for resume")
     finally:
+        policy = getattr(navigator, "request_policy", None)
+        if policy is not None:
+            stats.document_requests_this_run = policy.session_requests
         stats.finished_at = utc_now()
         atomic_write_json(summary_path, asdict(stats))
         log.info(
-            "Summary: saved=%d, skipped=%d, failed=%d, interrupted=%s",
+            "Summary: saved=%d, skipped=%d, failed=%d, requests=%d, "
+            "policy_stopped=%s, interrupted=%s",
             stats.succeeded,
             stats.already_complete,
             stats.failed,
+            stats.document_requests_this_run,
+            stats.policy_stopped,
             stats.interrupted,
         )
 
     if stats.interrupted:
         return 130
+    if stats.policy_stopped:
+        return POLICY_STOP_EXIT_CODE
     return 1 if stats.failed else 0
 
 
@@ -1001,6 +1599,8 @@ def crawl_catalogs(
                                 break
                             except KeyboardInterrupt:
                                 raise
+                            except CrawlPolicyStop:
+                                raise
                             except Exception as exc:
                                 last_page_error = exc
                                 log.warning(
@@ -1009,8 +1609,11 @@ def crawl_catalogs(
                                     page_url,
                                     exc,
                                 )
-                                if attempt < maximum_attempts:
-                                    retry_backoff(attempt)
+                                if not (
+                                    attempt < maximum_attempts
+                                    and navigator_allows_retry(navigator, exc)
+                                ):
+                                    break
 
                         visited_pages.add(page_url)
                         if discovery is None:
@@ -1110,6 +1713,8 @@ def crawl_catalogs(
                                     break
                                 except KeyboardInterrupt:
                                     raise
+                                except CrawlPolicyStop:
+                                    raise
                                 except Exception as exc:
                                     last_product_error = exc
                                     log.warning(
@@ -1118,8 +1723,11 @@ def crawl_catalogs(
                                         product_url,
                                         exc,
                                     )
-                                    if attempt < maximum_attempts:
-                                        retry_backoff(attempt)
+                                    if not (
+                                        attempt < maximum_attempts
+                                        and navigator_allows_retry(navigator, exc)
+                                    ):
+                                        break
                                 finally:
                                     safe_close(detail_page)
                                     try:
@@ -1148,6 +1756,8 @@ def crawl_catalogs(
                                 break
                 except KeyboardInterrupt:
                     raise
+                except CrawlPolicyStop:
+                    raise
                 except Exception as exc:
                     stats.catalog_pages_failed += 1
                     log.exception(
@@ -1169,6 +1779,9 @@ def crawl_catalogs(
                     )
                 finally:
                     safe_close(context)
+    except CrawlPolicyStop as exc:
+        mark_policy_stop(stats, exc)
+        log.warning("SAFE STOP: %s", exc)
     except KeyboardInterrupt:
         stats.interrupted = True
         log.warning("Interrupted; completed phone files are preserved for resume")
@@ -1185,6 +1798,9 @@ def crawl_catalogs(
             },
         )
     finally:
+        policy = getattr(navigator, "request_policy", None)
+        if policy is not None:
+            stats.document_requests_this_run = policy.session_requests
         stats.finished_at = utc_now()
         discovery_state["updated_at"] = stats.finished_at
         atomic_write_json(discovery_path, discovery_state)
@@ -1195,6 +1811,7 @@ def crawl_catalogs(
             maximum is None
             and len(catalogs) == len(selection.catalogs)
             and not stats.interrupted
+            and not stats.policy_stopped
             and stats.catalog_pages_failed == 0
         )
         atomic_write_json(
@@ -1220,17 +1837,21 @@ def crawl_catalogs(
         atomic_write_json(summary_path, asdict(stats))
         log.info(
             "Catalog summary: pages=%d, discovered=%d, saved=%d, skipped=%d, "
-            "failed=%d, interrupted=%s",
+            "failed=%d, requests=%d, policy_stopped=%s, interrupted=%s",
             stats.catalog_pages_visited,
             stats.products_discovered,
             stats.succeeded,
             stats.already_complete,
             stats.failed + stats.catalog_pages_failed,
+            stats.document_requests_this_run,
+            stats.policy_stopped,
             stats.interrupted,
         )
 
     if stats.interrupted:
         return 130
+    if stats.policy_stopped:
+        return POLICY_STOP_EXIT_CODE
     return 1 if stats.failed or stats.catalog_pages_failed else 0
 
 
@@ -1257,7 +1878,10 @@ def non_negative_float(value: str) -> float:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Navigate and scrape GSMArena product specification pages."
+        description=(
+            "Navigate GSMArena specification pages with persistent spacing, "
+            "budgets, cooldowns, and resumable output."
+        )
     )
     parser.add_argument(
         "url",
@@ -1282,7 +1906,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--crawl-mode",
         choices=["auto", "catalog", "direct"],
         default="auto",
-        help="'auto' prefers maker-catalog traversal and falls back to direct URLs.",
+        help=(
+            "'auto' uses direct manifest URLs when available because that "
+            "requires fewer requests (recommended)."
+        ),
     )
     parser.add_argument(
         "--maker",
@@ -1323,8 +1950,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--retries",
         type=non_negative_int,
-        default=2,
-        help="Retries after the first attempt for each URL (default: 2).",
+        default=0,
+        help=(
+            "Retries for transient browser/network errors only (default: 0; "
+            "403/429/503 and block pages are never retried)."
+        ),
     )
     parser.add_argument("--force", action="store_true", help="Overwrite valid outputs.")
     parser.add_argument("--headed", action="store_true", help="Show the browser UI.")
@@ -1347,14 +1977,48 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--delay-min",
         type=non_negative_float,
-        default=2.0,
-        help="Minimum delay after each request in seconds.",
+        default=DEFAULT_DELAY_MIN_SECONDS,
+        help=(
+            "Minimum spacing between document requests; cannot be below "
+            f"{MINIMUM_ALLOWED_DELAY_SECONDS:g}s "
+            f"(default: {DEFAULT_DELAY_MIN_SECONDS:g}s)."
+        ),
     )
     parser.add_argument(
         "--delay-max",
         type=non_negative_float,
-        default=5.0,
-        help="Maximum delay after each request in seconds.",
+        default=DEFAULT_DELAY_MAX_SECONDS,
+        help=(
+            "Maximum randomized spacing between document requests "
+            f"(default: {DEFAULT_DELAY_MAX_SECONDS:g}s)."
+        ),
+    )
+    parser.add_argument(
+        "--hourly-limit",
+        type=positive_int,
+        default=MAX_HOURLY_REQUESTS,
+        help=(
+            "Cross-run document-request budget per rolling hour; may only be "
+            f"lowered from {MAX_HOURLY_REQUESTS}."
+        ),
+    )
+    parser.add_argument(
+        "--daily-limit",
+        type=positive_int,
+        default=MAX_DAILY_REQUESTS,
+        help=(
+            "Cross-run document-request budget per rolling 24 hours; may only "
+            f"be lowered from {MAX_DAILY_REQUESTS}."
+        ),
+    )
+    parser.add_argument(
+        "--session-limit",
+        type=positive_int,
+        default=MAX_SESSION_REQUESTS,
+        help=(
+            "Document-request cap for one process; may only be lowered from "
+            f"{MAX_SESSION_REQUESTS}. Rerun the same command to resume."
+        ),
     )
     parser.add_argument(
         "--navigation-timeout-ms", type=positive_int, default=30_000
@@ -1363,18 +2027,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--load-assets",
         action="store_true",
-        help="Load images/fonts/media instead of blocking them.",
+        help="Disabled safety option retained only to explain old commands.",
     )
     parser.add_argument(
         "--proxy",
         action="append",
         default=[],
-        help="Optional proxy URL; repeat to rotate user-supplied proxies.",
+        help="Disabled; this crawler does not rotate proxies or evade refusals.",
     )
     parser.add_argument(
         "--proxy-file",
         type=Path,
-        help="Optional file containing one proxy per line.",
+        help="Disabled; this crawler does not rotate proxies or evade refusals.",
+    )
+    parser.add_argument(
+        "--clear-stale-lock",
+        action="store_true",
+        help=(
+            "Remove a lock left by a crashed process. Use only after verifying "
+            "that no other GSMArena crawler is running."
+        ),
     )
     parser.add_argument(
         "--log-level",
@@ -1394,7 +2066,7 @@ def configure_logging(level: str) -> None:
 
 def resolve_crawl_mode(selection: ManifestSelection, requested: str) -> str:
     if requested == "auto":
-        return "catalog" if selection.catalogs else "direct"
+        return "direct" if selection.product_urls else "catalog"
     return requested
 
 
@@ -1440,22 +2112,36 @@ def manifest_dry_run(
         },
         "selected_direct_in_range": len(selected_products),
         "direct_product_sample": selected_products[:sample],
+        "request_safety_defaults": {
+            "delay_seconds": [
+                DEFAULT_DELAY_MIN_SECONDS,
+                DEFAULT_DELAY_MAX_SECONDS,
+            ],
+            "hourly_document_requests": MAX_HOURLY_REQUESTS,
+            "daily_document_requests": MAX_DAILY_REQUESTS,
+            "session_document_requests": MAX_SESSION_REQUESTS,
+            "all_subresources_blocked": True,
+            "server_retry_after_persisted": True,
+        },
     }
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def build_navigator(args: argparse.Namespace, proxies: Sequence[dict]) -> GsmarenaNavigator:
-    evasion = GsmarenaEvasion(
-        proxies=proxies,
+def build_navigator(args: argparse.Namespace) -> GsmarenaNavigator:
+    request_policy = PersistentRequestPolicy(
+        args.output_dir,
         minimum_delay=args.delay_min,
         maximum_delay=args.delay_max,
+        hourly_limit=args.hourly_limit,
+        daily_limit=args.daily_limit,
+        session_limit=args.session_limit,
+        clear_stale_lock=args.clear_stale_lock,
     )
     return GsmarenaNavigator(
-        evasion=evasion,
         headless=not args.headed,
         navigation_timeout_ms=args.navigation_timeout_ms,
         selector_timeout_ms=args.selector_timeout_ms,
-        block_assets=not args.load_assets,
+        request_policy=request_policy,
     )
 
 
@@ -1470,6 +2156,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args.sitemap = DEFAULT_MANIFEST_PATH
     if args.delay_max < args.delay_min:
         parser.error("--delay-max must be greater than or equal to --delay-min")
+    if args.delay_min < MINIMUM_ALLOWED_DELAY_SECONDS:
+        parser.error(
+            f"--delay-min cannot be below {MINIMUM_ALLOWED_DELAY_SECONDS:g} "
+            "seconds for GSMArena"
+        )
+    if args.hourly_limit > MAX_HOURLY_REQUESTS:
+        parser.error(f"--hourly-limit cannot exceed {MAX_HOURLY_REQUESTS}")
+    if args.daily_limit > MAX_DAILY_REQUESTS:
+        parser.error(f"--daily-limit cannot exceed {MAX_DAILY_REQUESTS}")
+    if args.session_limit > MAX_SESSION_REQUESTS:
+        parser.error(f"--session-limit cannot exceed {MAX_SESSION_REQUESTS}")
+    if args.retries > 1:
+        parser.error("--retries cannot exceed 1 for this rate-limited source")
+    if args.load_assets:
+        parser.error(
+            "--load-assets is disabled: the crawler permits only the requested "
+            "HTML document. Open a phone manually for visual debugging."
+        )
+    if args.proxy or args.proxy_file is not None:
+        parser.error(
+            "Proxy rotation is disabled. It must not be used to bypass a site "
+            "refusal or Retry-After cooldown."
+        )
 
     try:
         range_minimum, range_maximum = resolve_phone_range(
@@ -1477,11 +2186,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             args.max_phone,
             args.limit,
         )
-    except ValueError as exc:
-        parser.error(str(exc))
-
-    try:
-        proxies = load_proxies(args.proxy, args.proxy_file)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1503,10 +2207,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 sample=args.sample,
             )
             resolved = resolve_crawl_mode(selection, args.crawl_mode)
-            has_input = bool(selection.catalogs) if resolved == "catalog" else bool(selection.product_urls)
+            has_input = (
+                bool(selection.catalogs)
+                if resolved == "catalog"
+                else bool(selection.product_urls)
+            )
             return 0 if has_input else 1
 
-        navigator = build_navigator(args, proxies)
+        navigator = build_navigator(args)
         resolved_mode = resolve_crawl_mode(selection, args.crawl_mode)
         if resolved_mode == "catalog":
             catalogs = select_catalogs(
@@ -1562,7 +2270,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         )
         return 0
 
-    navigator = build_navigator(args, proxies)
+    navigator = build_navigator(args)
     if catalog_match is not None:
         catalog = CatalogSeed.from_url(args.url)
         selection = ManifestSelection(
@@ -1590,6 +2298,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         with navigator:
             result = navigator.fetch_product(args.url)
+    except CrawlPolicyStop as exc:
+        log.warning("SAFE STOP: %s", exc)
+        return POLICY_STOP_EXIT_CODE
     except Exception as exc:
         log.error("Single-page scrape failed: %s", exc)
         return 1

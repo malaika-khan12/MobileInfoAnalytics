@@ -1,7 +1,15 @@
-POSGRESQL on supabase
+AMAZON REDSHIFT
 
 -- the functions that i need are to be such that they help in:
 --      filling data into tables from json files. Different filling functions for different schemas
 --      functions that help in extraction of data for gaining insights into prices and differences between different sites
 --      functions that help in maintaining data and extracting data that is complete instead of incomplete
 --      other functions for other purposes
+
+-- implementation contract:
+--      use COPY staging plus set-based stored procedures, not one INSERT per JSON row
+--      load GSMArena/original before marketplace schemas
+--      copy data_snapshot and data_snapshot_detail into every marketplace row only
+--          from the matched original.central_info product
+--      preserve unmatched payloads in warehouse.raw_ingest and warehouse.etl_rejects
+--      expose stable analytics views for Power BI price, completeness, and matching work

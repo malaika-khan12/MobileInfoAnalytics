@@ -1,176 +1,161 @@
-# JSON → CSV → PostgreSQL pipeline
+# JSON -> CSV -> Amazon Redshift pipeline
 
-This is the landing-to-database stage for MobileInfoAnalytics. It consumes the
-normalized JSON written by the site navigators; it does not scrape pages.
+This stage consumes the normalized JSON written by the site navigators. It
+does not scrape pages. The complete AWS setup is in [`../db/README.md`](../db/README.md).
 
-## Data contract and source lineage
+## Source lineage
 
-All implemented scrapers write the shape in `filestorage/template.json`. The
-navigators currently save only that template, so the original page URL is
-recovered before any database load.
+The scraper JSON currently has no URL field, so `jsonToCsv.py` preserves the
+page URL from the navigator filename and filtered sitemap:
 
-| JSON directory | Database schema | Filename → URL rule |
+| JSON directory | Redshift schema | Filename/manifest rule |
 |---|---|---|
-| `gsmarena.com` | `original` | `gsmarena__<page>.json` → `https://www.gsmarena.com/<page>` |
-| `daraz.pk` | `daraz` | `daraz__<page>.json` → `/products/<page>` |
-| `mymobile.pk` | `mymobile` | `mymobile__<slug>.json` → `/products/<slug>/` |
-| `mega.pk` | `mega` | Must resolve through `sitemap_mobile/mega.pk.json`; the filename does not retain `/mobiles_products/<id>/` |
-| `whatamobile.com.pk` | `whatamobile` | `whatamobile__<slug>.json` → `/product/<slug>/` |
-| `whatmobile.com.pk` | `whatmobile` | `whatmobile__<page>.json` → `/<page>` |
+| `gsmarena.com` | `original` | `gsmarena__<page>.json` -> GSMArena `<page>` |
+| `daraz.pk` | `daraz` | `daraz__<page>.json` -> `/products/<page>` |
+| `mymobile.pk` | `mymobile` | `mymobile__<slug>.json` -> `/products/<slug>/` |
+| `mega.pk` | `mega` | Must use the manifest because the numeric path ID is absent from the filename |
+| `whatamobile.com.pk` | `whatamobile` | `whatamobile__<slug>.json` -> `/product/<slug>/` |
+| `whatmobile.com.pk` | `whatmobile` | `whatmobile__<page>.json` -> `/<page>` |
 
-Resolution priority is: an explicit future `source_url` field, a filtered
-manifest/catalog-discovery record, then a deterministic filename rule. An
-ambiguous or unrecoverable URL goes to `_manifest/errors.csv`; the converter
-never fabricates one. This preserves the URL needed by the eventual database
-even though current phone JSON has no URL field.
+Resolution order is: an explicit future `source_url`, a filtered manifest or
+catalog record, then a deterministic filename rule. An ambiguous URL is sent
+to `_manifest/errors.csv`; it is never guessed.
 
-The JSON file modification time is used as `data_snapshot` in UTC. For an
-import with a known crawl timestamp, supply `--snapshot-at` explicitly.
+## Canonical release snapshots
 
-## 1. Create the CSV hierarchy
+GSMArena is the only release-date authority. For `original` records:
 
-From the repository root in Windows PowerShell:
+1. parse `Launch.Announced`;
+2. if it cannot provide both a year and month, parse `Launch.Status`;
+3. if that also fails, use the current UTC date.
+
+`2024, July 03` becomes `data_snapshot=2024` and
+`data_snapshot_detail=07-03`. `2024, December` becomes year `2024` and detail
+`12`, preserving month-only precision. The CSV also contains
+`snapshot_source` (`announced`, `status`, or `current_utc`) for auditability.
+
+Marketplace CSV rows deliberately leave both snapshot columns blank and use
+`snapshot_source=original_database`. During loading, Redshift first matches the
+row to `original.central_info`, then copies both canonical values. A
+marketplace file can never overwrite them.
+
+## Create the hierarchy
+
+From Windows PowerShell at the repository root:
 
 ```powershell
 python .\filestorage\jsonToCsv.py
 ```
 
-Useful options:
+Useful controls:
 
 ```powershell
-# One source only
+# One source
 python .\filestorage\jsonToCsv.py --site gsmarena.com
 
-# One known timestamp for an imported crawl batch
-python .\filestorage\jsonToCsv.py `
-  --snapshot-at 2026-08-17T12:00:00+00:00
+# Deterministic final fallback; valid Announced/Status values still win
+python .\filestorage\jsonToCsv.py --fallback-date 2026-08-17
 
-# Stop immediately on bad JSON or unresolved lineage
+# Stop at the first invalid file
 python .\filestorage\jsonToCsv.py --strict
+
+# Optionally archive the generated hierarchy
+python .\filestorage\jsonToCsv.py `
+  --archive-uri s3://my-private-bucket/landing/csv/run-2026-08-17
 ```
 
-Output is streamed into `filestorage/csvs/`:
+The output is:
 
 ```text
 csvs/
-├── _manifest/
-│   ├── manifest.json
-│   ├── records.csv
-│   └── errors.csv
-├── original/
-│   ├── records.csv             # canonical loader input
-│   ├── central_info.csv
-│   ├── network.csv ... battery.csv
-│   └── raw_ingest.csv
-└── <marketplace>/
-    ├── records.csv             # canonical loader input
-    ├── secondary_info.csv
-    ├── central_info.csv        # matching status, not guessed IDs
-    ├── network.csv ... battery.csv
-    └── raw_ingest.csv
+|-- _manifest/
+|   |-- manifest.json
+|   |-- records.csv
+|   `-- errors.csv
+|-- original/
+|   |-- records.csv              # Redshift COPY contract
+|   |-- central_info.csv
+|   |-- network.csv ... battery.csv
+|   `-- raw_ingest.csv
+`-- <marketplace>/
+    |-- records.csv              # Redshift COPY contract
+    |-- secondary_info.csv
+    |-- central_info.csv         # unresolved until database matching
+    |-- network.csv ... battery.csv
+    `-- raw_ingest.csv
 ```
 
-`record_key` is a stable SHA-256 staging key derived from schema + source URL.
-Database identity values are assigned by PostgreSQL and must not be inferred
-from CSV row order.
+`record_key` is a stable SHA-256 of schema plus source URL. `file_sha256`
+identifies the exact scraped payload. Database surrogate IDs are assigned by
+the Redshift procedures, not inferred from CSV row order.
 
-The per-table files make the normalized hierarchy inspectable and usable with
-Athena/Synapse. `csvToDataBase.py` intentionally loads `records.csv`, including
-its lossless `payload_json`, through transactional SQL functions. This avoids
-partial parent/detail inserts and unstable client-generated surrogate IDs.
+The per-table files are human-inspectable exports. The database loader consumes
+only each schema's lossless `records.csv`.
 
-## 2. Initialize PostgreSQL/Supabase
+## Validate and load Redshift
 
-Run these files in order using the Supabase SQL editor or `psql`:
-
-```text
-db/schema_v1.sql
-db/functions_v1.sql
-```
-
-The schema migration creates private data schemas. Only `api.*` security-
-definer functions are granted to Supabase `service_role`; `anon` and
-`authenticated` receive no direct ETL access.
-
-## 3. Validate, then load
-
-Install dependencies and validate without a database:
+Install dependencies and validate without AWS access:
 
 ```powershell
 python -m pip install -r .\requirements.txt
 python .\filestorage\csvToDataBase.py --dry-run
 ```
 
-Load Supabase using its **direct PostgreSQL or pooler connection string**, not
-the browser REST URL or API key:
+After applying `db/schema_v1.sql` and `db/functions_v1.sql` and setting the
+environment variables described in `db/README.md`:
 
 ```powershell
-$env:SUPABASE_DB_URL = "postgresql://...?...sslmode=require"
-python .\filestorage\csvToDataBase.py --target supabase
+python .\filestorage\csvToDataBase.py
 ```
 
-The connection string is read from the environment and is never written to a
-CSV or log. Ingestion is idempotent by source URL and snapshot. A failed batch
-is rolled back and retried row-by-row; rejects are recorded both in
-`warehouse.etl_rejects` and
-`filestorage/csvs/_manifest/database_failures.csv`.
+The loader uploads a private, uniquely named temporary S3 batch, runs COPY into
+`staging.phone_records`, calls `etl.load_all()`, and removes only the objects it
+uploaded. `SUPER` columns receive valid serialized JSON from the CSV fields.
 
 Common controls:
 
 ```powershell
-# Test a small batch
+# Small end-to-end load
 python .\filestorage\csvToDataBase.py --limit 100
 
-# Load selected sources
+# Selected inputs
 python .\filestorage\csvToDataBase.py `
-  --schema original --schema mega --batch-size 500
+  --schema original --schema mega
 
-# Stop instead of quarantining a bad row
-python .\filestorage\csvToDataBase.py --stop-on-error
+# Retain the temporary S3 files while troubleshooting COPY
+python .\filestorage\csvToDataBase.py --keep-s3-staging
 ```
+
+Run only one loader at a time because v1 uses shared staging tables.
 
 ## Product matching
 
-`original.central_info` is the master GSMArena product. Marketplace payloads
-are always stored in `secondary_info`, even when no master match exists. The
-strict `central_info.product_id NOT NULL` relation is created only after:
+The first load must include GSMArena. Marketplace rows are accepted only when
+they have either:
 
-1. an unambiguous normalized-name match, or
-2. an explicit reviewed mapping.
-
-An explicit map is a CSV with:
-
-```csv
-source_schema,source_url,product_id
-mega,https://www.mega.pk/mobiles_products/23647/Example.html,123
-```
-
-Load it with:
+1. one exact, case-insensitive GSMArena name match; or
+2. one reviewed mapping in a CSV containing
+   `source_schema,source_url,product_id`.
 
 ```powershell
-python .\filestorage\csvToDataBase.py --master-map .\reviewed_matches.csv
+python .\filestorage\csvToDataBase.py `
+  --master-map .\reviewed_matches.csv
 ```
 
-Fuzzy matching is intentionally not automatic in v1: a false product merge is
-harder to repair than an unmatched listing. Review unmatched rows with
-`api.unmatched_listings()` and link one using
-`api.link_source_product(schema, source_serial_number, product_id)`.
+Fuzzy matching is intentionally not automatic. An unmatched payload is retained
+in `warehouse.raw_ingest` and explained in `warehouse.etl_rejects`, but is not
+allowed into normalized source tables without a GSMArena product ID.
 
-## Analytics functions
+## Warehouse read surfaces
 
-The following Supabase/PostgreSQL functions cover the requests in
-`db/functions_layout.txt`:
+- `warehouse.current_listings`: one union of canonical and marketplace rows.
+- `warehouse.price_history`: append-only observed prices; `observed_at` is the
+  crawl/load timeline and must not be confused with product release dates.
+- `analytics.product_bundle`: complete GSMArena specification record.
+- `analytics.price_comparison`: latest seller prices by product.
+- `analytics.site_price_summary`: aggregate source price statistics.
+- `analytics.incomplete_records`: low-completeness raw inputs.
+- `analytics.unmatched_records`: reviewed-mapping queue.
 
-- `api.complete_listings(minimum, matched_only, source_schema)`
-- `api.unmatched_listings(source_schema)`
-- `api.price_comparison(product_id)`
-- `api.product_price_history(product_id, from, to)`
-- `api.site_price_summary(from, to)`
-- `api.product_bundle(product_id)`
-- `api.refresh_exact_name_links(source_schema)`
-
-Marketplace prices are tagged `PKR`. GSMArena's `Price[]` can contain multiple
-currencies whose positions are not labeled by the scraper, so those historical
-rows deliberately keep `currency_code = NULL` instead of being falsely marked
-as PKR.
-
+GSMArena price arrays do not identify currencies, so their history currency is
+NULL. Marketplace prices are marked PKR.

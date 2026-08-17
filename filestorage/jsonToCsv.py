@@ -8,10 +8,11 @@ deterministic reconstruction is used only where the filename preserves the
 complete product path.  Mega.pk is intentionally never guessed because its
 numeric path component is not present in the JSON filename.
 
-The canonical ``<schema>/records.csv`` files are the input consumed by
-``csvToDataBase.py``.  Per-table CSV files are also emitted for inspection,
-object-storage query engines, and future warehouse COPY jobs.  ``record_key``
-is a stable staging key and is not a database surrogate key.
+The canonical ``<schema>/records.csv`` files are the Redshift COPY input used
+by ``csvToDataBase.py``. Per-table CSV files are also emitted for inspection
+and object-storage query engines. ``record_key`` is a stable staging key and
+is not a database surrogate key. Only GSMArena derives release snapshots;
+marketplace rows receive them later from the canonical database match.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import argparse
 import csv
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import logging
@@ -71,6 +72,41 @@ SCHEMA_ORDER = (
     "whatamobile",
     "whatmobile",
 )
+
+MONTH_NUMBERS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+MONTH_PATTERN = "|".join(MONTH_NUMBERS)
+GSMARENA_TEXT_DATE = re.compile(
+    rf"(?<!\d)(?P<year>(?:19|20)\d{{2}})\s*,?\s*"
+    rf"(?P<month>{MONTH_PATTERN})"
+    rf"(?:\s+(?P<day>0?[1-9]|[12]\d|3[01]))?(?!\d)",
+    re.IGNORECASE,
+)
+GSMARENA_ISO_DATE = re.compile(
+    r"(?<!\d)(?P<year>(?:19|20)\d{2})[-/](?P<month>0?[1-9]|1[0-2])"
+    r"(?:[-/](?P<day>0?[1-9]|[12]\d|3[01]))?(?!\d)"
+)
+
+
+@dataclass(frozen=True)
+class SnapshotValue:
+    """Canonical product-release date with explicit source provenance."""
+
+    year: str
+    detail: str
+    source: str
 
 
 @dataclass(frozen=True)
@@ -183,6 +219,8 @@ RECORD_FIELDS = [
     "source_url",
     "url_recovery",
     "data_snapshot",
+    "data_snapshot_detail",
+    "snapshot_source",
     "mobile_name",
     "network_2g",
     "network_3g",
@@ -240,6 +278,8 @@ TABLE_FIELDS: dict[str, list[str]] = {
     "entity": [
         "record_key",
         "data_snapshot",
+        "data_snapshot_detail",
+        "snapshot_source",
         "name",
         "url",
         "sound_loudspeaker",
@@ -308,6 +348,8 @@ TABLE_FIELDS: dict[str, list[str]] = {
         "source_url",
         "source_file",
         "data_snapshot",
+        "data_snapshot_detail",
+        "snapshot_source",
         "file_sha256",
         "payload_json",
     ],
@@ -321,6 +363,8 @@ MANIFEST_RECORD_FIELDS = [
     "source_url",
     "url_recovery",
     "data_snapshot",
+    "data_snapshot_detail",
+    "snapshot_source",
     "mobile_name",
     "file_sha256",
     "completeness_score",
@@ -536,7 +580,7 @@ def price_values(value: Any) -> list[int | float]:
         number = float(match.group(0))
         if number > 0:
             output.append(int(number) if number.is_integer() else number)
-    return output
+    return output or [-1]
 
 
 def has_value(value: Any) -> bool:
@@ -588,19 +632,72 @@ def completeness(payload: Mapping[str, Any]) -> float:
     return round(sum(has_value(item) for item in values) / len(values), 5)
 
 
-def parse_snapshot(value: str) -> datetime:
-    normalized = value.strip().replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(normalized)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+def parse_fallback_date(value: str) -> date:
+    """Parse the deterministic fallback accepted by ``--fallback-date``."""
+
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "fallback date must use YYYY-MM-DD"
+        ) from exc
 
 
-def snapshot_for(path: Path, override: datetime | None) -> str:
-    timestamp = override or datetime.fromtimestamp(
-        path.stat().st_mtime, tz=timezone.utc
-    )
-    return timestamp.astimezone(timezone.utc).isoformat(timespec="seconds")
+def parse_gsmarena_snapshot_text(value: Any) -> tuple[str, str] | None:
+    """Extract ``(YYYY, MM or MM-DD)`` from a GSMArena launch value.
+
+    GSMArena currently emits values such as ``2024, July 03`` and
+    ``Available. Released 2024, July``.  A year without a month is deliberately
+    treated as incomplete so Announced can fall through to a more precise
+    Status value.  Calendar validation rejects impossible dates.
+    """
+
+    text = clean_text(value)
+    if not text:
+        return None
+    match = GSMARENA_TEXT_DATE.search(text)
+    if match:
+        year = int(match.group("year"))
+        month = MONTH_NUMBERS[match.group("month").lower()]
+        day_text = match.group("day")
+    else:
+        match = GSMARENA_ISO_DATE.search(text)
+        if not match:
+            return None
+        year = int(match.group("year"))
+        month = int(match.group("month"))
+        day_text = match.group("day")
+    if day_text is None:
+        return str(year), f"{month:02d}"
+    day = int(day_text)
+    try:
+        date(year, month, day)
+    except ValueError:
+        return None
+    return str(year), f"{month:02d}-{day:02d}"
+
+
+def snapshot_for_payload(
+    payload: Mapping[str, Any],
+    schema: str,
+    fallback: date | None = None,
+) -> SnapshotValue:
+    """Return the one authoritative product snapshot or a DB-owned marker.
+
+    Only the ``original`` (GSMArena) schema is allowed to derive release dates
+    from scraped JSON.  Marketplace CSV rows leave both values empty; Redshift
+    copies them from the matched ``original.central_info`` row.
+    """
+
+    if schema != "original":
+        return SnapshotValue("", "", "original_database")
+    launch = section(payload, "Launch")
+    for field, source in (("Announced", "announced"), ("Status", "status")):
+        parsed = parse_gsmarena_snapshot_text(launch.get(field))
+        if parsed is not None:
+            return SnapshotValue(parsed[0], parsed[1], source)
+    today = fallback or datetime.now(timezone.utc).date()
+    return SnapshotValue(str(today.year), today.strftime("%m-%d"), "current_utc")
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -629,7 +726,7 @@ def flatten_record(
     source_file: str,
     source_url: str,
     url_recovery: str,
-    data_snapshot: str,
+    snapshot: SnapshotValue,
     file_sha256: str,
 ) -> dict[str, str]:
     network = section(payload, "Network")
@@ -654,7 +751,9 @@ def flatten_record(
         "source_file": source_file,
         "source_url": source_url,
         "url_recovery": url_recovery,
-        "data_snapshot": data_snapshot,
+        "data_snapshot": snapshot.year,
+        "data_snapshot_detail": snapshot.detail,
+        "snapshot_source": snapshot.source,
         "mobile_name": clean_text(payload.get("MobileName")),
         "network_2g": bool_text(network.get("2G"), True),
         "network_3g": bool_text(network.get("3G"), True),
@@ -724,6 +823,8 @@ def normalized_rows(flat: Mapping[str, str], schema: str) -> dict[str, dict[str,
         entity_name: {
             "record_key": key,
             "data_snapshot": flat["data_snapshot"],
+            "data_snapshot_detail": flat["data_snapshot_detail"],
+            "snapshot_source": flat["snapshot_source"],
             "name": flat["mobile_name"],
             "url": flat["source_url"],
             "sound_loudspeaker": flat["sound_loudspeaker"],
@@ -813,6 +914,8 @@ def normalized_rows(flat: Mapping[str, str], schema: str) -> dict[str, dict[str,
             "source_url": flat["source_url"],
             "source_file": flat["source_file"],
             "data_snapshot": flat["data_snapshot"],
+            "data_snapshot_detail": flat["data_snapshot_detail"],
+            "snapshot_source": flat["snapshot_source"],
             "file_sha256": flat["file_sha256"],
             "payload_json": flat["payload_json"],
         },
@@ -967,38 +1070,7 @@ def upload_tree(output_dir: Path, archive_uri: str) -> int:
             client.upload_file(str(path), bucket, key)
         return len(files)
 
-    if parsed.scheme in {"az", "azure"}:
-        try:
-            from azure.storage.blob import BlobServiceClient  # type: ignore[import-not-found]
-        except ImportError as exc:
-            raise RuntimeError(
-                "Azure archival requires azure-storage-blob (install requirements.txt)"
-            ) from exc
-        connection_string = os.environ.get("AZURE_STORAGE_CONNECTION_STRING")
-        if not connection_string:
-            raise RuntimeError("AZURE_STORAGE_CONNECTION_STRING is required")
-        container = parsed.netloc
-        if not container:
-            raise ValueError("Azure URI must be az://container/optional-prefix")
-        prefix = parsed.path.strip("/")
-        service = BlobServiceClient.from_connection_string(connection_string)
-        container_client = service.get_container_client(container)
-        try:
-            container_client.create_container()
-        except Exception as exc:  # Azure raises ResourceExistsError by subtype.
-            if (
-                "ContainerAlreadyExists" not in type(exc).__name__
-                and "exists" not in str(exc).lower()
-            ):
-                raise
-        for path in files:
-            relative = path.relative_to(output_dir).as_posix()
-            blob_name = "/".join(part for part in (prefix, relative) if part)
-            with path.open("rb") as handle:
-                container_client.upload_blob(blob_name, handle, overwrite=True)
-        return len(files)
-
-    raise ValueError("--archive-uri must use s3://, az://, or azure://")
+    raise ValueError("--archive-uri must use s3://")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1022,9 +1094,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Process only this site (repeatable; www. is optional).",
     )
     parser.add_argument(
-        "--snapshot-at",
-        type=parse_snapshot,
-        help="Override file modification times with an ISO-8601 UTC snapshot.",
+        "--fallback-date",
+        type=parse_fallback_date,
+        help=(
+            "Use YYYY-MM-DD only when GSMArena Announced and Status contain "
+            "no parseable release date (default: the current UTC date)."
+        ),
     )
     parser.add_argument(
         "--strict",
@@ -1033,7 +1108,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--archive-uri",
-        help="After conversion upload csvs/ to s3://bucket/prefix or az://container/prefix.",
+        help="After conversion upload csvs/ to s3://bucket/optional-prefix.",
     )
     parser.add_argument(
         "--log-level",
@@ -1067,6 +1142,7 @@ def run_conversion(args: argparse.Namespace) -> dict[str, Any]:
     processed = 0
     errors = 0
     recovery_counts: dict[str, int] = {}
+    snapshot_source_counts: dict[str, int] = {}
 
     with AtomicCsvHierarchy(output_dir, supported_schemas) as outputs:
         for index, (path, site, config) in enumerate(inputs, start=1):
@@ -1089,19 +1165,27 @@ def run_conversion(args: argparse.Namespace) -> dict[str, Any]:
                         resolver.index_sources or "filename rules only",
                     )
                 source_url, recovery = resolver.resolve(path, payload)
+                snapshot = snapshot_for_payload(
+                    payload,
+                    config.schema,
+                    args.fallback_date,
+                )
                 flat = flatten_record(
                     payload,
                     config=config,
                     source_file=relative,
                     source_url=source_url,
                     url_recovery=recovery,
-                    data_snapshot=snapshot_for(path, args.snapshot_at),
+                    snapshot=snapshot,
                     file_sha256=sha256_bytes(raw),
                 )
                 outputs.write_record(config.schema, flat)
                 processed += 1
                 counts_by_schema[config.schema] += 1
                 recovery_counts[recovery] = recovery_counts.get(recovery, 0) + 1
+                snapshot_source_counts[snapshot.source] = (
+                    snapshot_source_counts.get(snapshot.source, 0) + 1
+                )
                 if index % 1000 == 0:
                     LOG.info("Processed %d/%d JSON files", index, len(inputs))
             except (ConversionError, OSError, ValueError) as exc:
@@ -1125,7 +1209,7 @@ def run_conversion(args: argparse.Namespace) -> dict[str, Any]:
 
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     manifest = {
-        "format_version": 1,
+        "format_version": 2,
         "generated_at": generated_at,
         "input_directory": display_path(input_dir),
         "output_directory": display_path(output_dir),
@@ -1134,6 +1218,7 @@ def run_conversion(args: argparse.Namespace) -> dict[str, Any]:
         "records_rejected": errors,
         "records_by_schema": counts_by_schema,
         "url_recovery_counts": dict(sorted(recovery_counts.items())),
+        "snapshot_source_counts": dict(sorted(snapshot_source_counts.items())),
         "schemas": supported_schemas,
         "table_files": sorted(output_files),
         "source_contract": "filestorage/template.json",

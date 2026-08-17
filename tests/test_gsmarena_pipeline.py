@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -146,7 +147,7 @@ class FilterTests(unittest.TestCase):
 
 
 class ManifestTests(unittest.TestCase):
-    def test_combined_manifest_prefers_catalogs_in_auto_mode(self) -> None:
+    def test_combined_manifest_prefers_fewer_request_direct_mode(self) -> None:
         payload = {
             "catalog_urls": [
                 {"url": CATALOG_XIAOMI},
@@ -166,7 +167,7 @@ class ManifestTests(unittest.TestCase):
             [catalog.url for catalog in selection.catalogs],
             [CATALOG_XIAOMI, CATALOG_SAMSUNG],
         )
-        self.assertEqual(navigator.resolve_crawl_mode(selection, "auto"), "catalog")
+        self.assertEqual(navigator.resolve_crawl_mode(selection, "auto"), "direct")
 
     def test_filtered_manifest_is_loaded_and_non_products_are_rejected(self) -> None:
         payload = {
@@ -236,6 +237,173 @@ class PhoneRangeTests(unittest.TestCase):
         self.assertEqual((short.min_phone, short.max_phone), (10, 20))
         self.assertEqual((long.min_phone, long.max_phone), (10, 20))
 
+    def test_parser_defaults_to_conservative_request_policy(self) -> None:
+        args = navigator.build_parser().parse_args([])
+        self.assertEqual(args.retries, 0)
+        self.assertEqual(args.delay_min, navigator.DEFAULT_DELAY_MIN_SECONDS)
+        self.assertEqual(args.delay_max, navigator.DEFAULT_DELAY_MAX_SECONDS)
+        self.assertEqual(args.hourly_limit, navigator.MAX_HOURLY_REQUESTS)
+        self.assertEqual(args.daily_limit, navigator.MAX_DAILY_REQUESTS)
+        self.assertEqual(args.session_limit, navigator.MAX_SESSION_REQUESTS)
+
+
+class FakeClock:
+    def __init__(self, value: float) -> None:
+        self.value = value
+        self.sleeps = []
+
+    def __call__(self) -> float:
+        return self.value
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.value += seconds
+
+
+class RequestPolicyTests(unittest.TestCase):
+    def make_policy(self, directory, clock, **overrides):
+        options = {
+            "minimum_delay": 60,
+            "maximum_delay": 60,
+            "hourly_limit": 3,
+            "daily_limit": 4,
+            "session_limit": 2,
+            "clock": clock,
+            "sleeper": clock.sleep,
+            "uniform": lambda _minimum, _maximum: 60,
+        }
+        options.update(overrides)
+        return navigator.PersistentRequestPolicy(Path(directory), **options)
+
+    def test_retry_after_supports_seconds_and_http_date(self) -> None:
+        self.assertEqual(navigator.parse_retry_after("36000", 1_700_000_000), 36000)
+        future = datetime.fromtimestamp(1_700_000_120, timezone.utc)
+        http_date = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        self.assertEqual(
+            navigator.parse_retry_after(http_date, 1_700_000_000),
+            120,
+        )
+        self.assertIsNone(navigator.parse_retry_after("not-a-date"))
+
+    def test_spacing_and_session_limit_persist_request_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock(1_700_000_000)
+            policy = self.make_policy(directory, clock)
+            policy.acquire()
+            try:
+                policy.before_request(url=PRODUCT_ONE, kind="product")
+                clock.value += 1
+                policy.before_request(url=PRODUCT_TWO, kind="product")
+                self.assertEqual(clock.sleeps, [59])
+                with self.assertRaises(navigator.CrawlPolicyStop) as raised:
+                    policy.before_request(url=PRODUCT_ONE, kind="product")
+                self.assertEqual(raised.exception.reason, "session_limit")
+            finally:
+                policy.release()
+
+            state = json.loads(
+                (Path(directory) / navigator.POLICY_STATE_FILENAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(len(state["request_times_utc"]), 2)
+            self.assertFalse((Path(directory) / navigator.CRAWL_LOCK_FILENAME).exists())
+
+    def test_server_retry_after_is_not_capped_and_blocks_next_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock(1_700_000_000)
+            first = self.make_policy(directory, clock)
+            first.acquire()
+            try:
+                resume_at = first.record_server_stop(
+                    url=PRODUCT_ONE,
+                    status=429,
+                    retry_after_seconds=36_000,
+                    reason="http_429",
+                )
+            finally:
+                first.release()
+
+            expected = navigator.epoch_to_utc(
+                clock.value
+                + 36_000
+                + navigator.SERVER_COOLDOWN_BUFFER_SECONDS
+            )
+            self.assertEqual(resume_at, expected)
+
+            second = self.make_policy(directory, clock)
+            second.acquire()
+            try:
+                with self.assertRaises(navigator.CrawlPolicyStop) as raised:
+                    second.before_request(url=PRODUCT_TWO, kind="product")
+                self.assertEqual(raised.exception.reason, "cooldown_active")
+                self.assertEqual(raised.exception.resume_at, expected)
+                self.assertEqual(second.session_requests, 0)
+            finally:
+                second.release()
+
+    def test_known_cooldown_stops_before_playwright_import(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock(1_700_000_000)
+            first = self.make_policy(directory, clock)
+            first.acquire()
+            try:
+                first.record_server_stop(
+                    url=PRODUCT_ONE,
+                    status=429,
+                    retry_after_seconds=36_000,
+                    reason="http_429",
+                )
+            finally:
+                first.release()
+
+            second = self.make_policy(directory, clock)
+            nav = navigator.GsmarenaNavigator(request_policy=second)
+            original_import = navigator.import_playwright
+
+            def forbidden_import():
+                self.fail("Playwright import must not happen during cooldown")
+
+            navigator.import_playwright = forbidden_import
+            try:
+                with self.assertRaises(navigator.CrawlPolicyStop):
+                    nav.start()
+            finally:
+                navigator.import_playwright = original_import
+                nav.close()
+
+            self.assertFalse((Path(directory) / navigator.CRAWL_LOCK_FILENAME).exists())
+
+    def test_hourly_limit_survives_process_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock(1_700_000_000)
+            first = self.make_policy(
+                directory,
+                clock,
+                hourly_limit=1,
+                session_limit=2,
+            )
+            first.acquire()
+            try:
+                first.before_request(url=PRODUCT_ONE, kind="product")
+            finally:
+                first.release()
+
+            second = self.make_policy(
+                directory,
+                clock,
+                hourly_limit=1,
+                session_limit=2,
+            )
+            second.acquire()
+            try:
+                with self.assertRaises(navigator.CrawlPolicyStop) as raised:
+                    second.before_request(url=PRODUCT_TWO, kind="product")
+                self.assertEqual(raised.exception.reason, "hourly_limit")
+                self.assertEqual(second.session_requests, 0)
+            finally:
+                second.release()
+
 
 class FakeDirectNavigator:
     def __init__(self) -> None:
@@ -253,6 +421,27 @@ class FakeDirectNavigator:
 
     def restart_browser(self) -> None:
         return None
+
+
+class FakeRequestCounter:
+    session_requests = 1
+
+
+class FakePolicyStopNavigator(FakeDirectNavigator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_policy = FakeRequestCounter()
+        self.attempts = 0
+
+    def fetch_product(self, url):
+        self.attempts += 1
+        raise navigator.CrawlPolicyStop(
+            "server says stop",
+            reason="http_429",
+            resume_at="2030-01-01T00:00:00+00:00",
+            status=429,
+            retry_after_seconds=36_000,
+        )
 
 
 class DirectCrawlRangeTests(unittest.TestCase):
@@ -296,6 +485,125 @@ class DirectCrawlRangeTests(unittest.TestCase):
             self.assertEqual(summary["range_max"], 2)
             self.assertEqual(summary["selected_urls"], 1)
 
+    def test_rate_limit_stops_immediately_without_retry_or_failure_record(self) -> None:
+        selection = navigator.ManifestSelection(
+            path="synthetic-manifest.json",
+            catalog_records_seen=0,
+            catalog_duplicate_records=0,
+            rejected_non_catalogs=0,
+            catalogs=[],
+            records_seen=1,
+            duplicate_records=0,
+            rejected_non_products=0,
+            product_urls=[PRODUCT_ONE],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            fake_nav = FakePolicyStopNavigator()
+            code = navigator.crawl_manifest(
+                selection,
+                output_dir,
+                minimum=1,
+                maximum=1,
+                force=False,
+                retries=1,
+                navigator=fake_nav,
+            )
+
+            self.assertEqual(code, navigator.POLICY_STOP_EXIT_CODE)
+            self.assertEqual(fake_nav.attempts, 1)
+            self.assertFalse((output_dir / "_failures.jsonl").exists())
+            summary = json.loads(
+                (output_dir / "_crawl_summary.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(summary["policy_stopped"])
+            self.assertEqual(summary["policy_stop_reason"], "http_429")
+            self.assertEqual(summary["server_status"], 429)
+            self.assertEqual(summary["retry_after_seconds"], 36_000)
+            self.assertEqual(summary["failed"], 0)
+            self.assertEqual(summary["document_requests_this_run"], 1)
+
+
+class RecordingServerStopPolicy:
+    def __init__(self) -> None:
+        self.recorded = None
+
+    def record_server_stop(self, **kwargs):
+        self.recorded = kwargs
+        return "2030-01-01T00:00:00+00:00"
+
+
+class HttpRefusalTests(unittest.TestCase):
+    def test_429_records_full_retry_after_and_raises_policy_stop(self) -> None:
+        policy = RecordingServerStopPolicy()
+        nav = navigator.GsmarenaNavigator(request_policy=policy)
+        response = type(
+            "Response",
+            (),
+            {"status": 429, "headers": {"retry-after": "36000"}},
+        )()
+
+        with self.assertRaises(navigator.CrawlPolicyStop) as raised:
+            nav._guard_response(response, PRODUCT_ONE)
+
+        self.assertEqual(raised.exception.reason, "http_429")
+        self.assertEqual(raised.exception.retry_after_seconds, 36_000)
+        self.assertEqual(policy.recorded["retry_after_seconds"], 36_000)
+
+
+class FakeFrame:
+    def __init__(self, parent_frame=None) -> None:
+        self.parent_frame = parent_frame
+
+
+class FakeRouteRequest:
+    def __init__(self, resource_type, url, parent_frame=None) -> None:
+        self.resource_type = resource_type
+        self.url = url
+        self.frame = FakeFrame(parent_frame)
+
+
+class FakeRoute:
+    def __init__(self, request) -> None:
+        self.request = request
+        self.action = None
+
+    def abort(self, *_args) -> None:
+        self.action = "abort"
+
+    def continue_(self) -> None:
+        self.action = "continue"
+
+
+class RequestRoutingTests(unittest.TestCase):
+    def test_only_same_site_main_document_is_allowed(self) -> None:
+        main = FakeRoute(
+            FakeRouteRequest("document", PRODUCT_ONE, parent_frame=None)
+        )
+        navigator.GsmarenaNavigator._route_request(main)
+        self.assertEqual(main.action, "continue")
+
+        for route in (
+            FakeRoute(FakeRouteRequest("image", PRODUCT_ONE)),
+            FakeRoute(FakeRouteRequest("script", PRODUCT_ONE)),
+            FakeRoute(
+                FakeRouteRequest(
+                    "document",
+                    PRODUCT_ONE,
+                    parent_frame=FakeFrame(),
+                )
+            ),
+            FakeRoute(
+                FakeRouteRequest(
+                    "document",
+                    "https://ads.example.test/frame",
+                    parent_frame=FakeFrame(),
+                )
+            ),
+        ):
+            navigator.GsmarenaNavigator._route_request(route)
+            self.assertEqual(route.action, "abort")
+
 
 class FakeResponse:
     status = 200
@@ -328,12 +636,7 @@ class FakeCatalogPage:
 
 class CatalogDiscoveryTests(unittest.TestCase):
     def test_catalog_page_discovers_products_and_same_maker_pagination(self) -> None:
-        nav = navigator.GsmarenaNavigator(
-            evasion=navigator.GsmarenaEvasion(
-                minimum_delay=0,
-                maximum_delay=0,
-            )
-        )
+        nav = navigator.GsmarenaNavigator()
         result = nav.discover_catalog_page(
             FakeCatalogPage(),
             CATALOG_XIAOMI,

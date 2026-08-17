@@ -92,7 +92,7 @@ DEFAULT_WAIT_SELECTOR = "#specs-list"
 # hour, before browser subresources, and received a ten-hour Retry-After. The
 # new defaults are intentionally much slower and may only be made stricter from
 # the CLI.
-MINIMUM_ALLOWED_DELAY_SECONDS = 1.0
+MINIMUM_ALLOWED_DELAY_SECONDS = 10.0
 DEFAULT_DELAY_MIN_SECONDS = 12.0
 DEFAULT_DELAY_MAX_SECONDS = 14.0
 MAX_HOURLY_REQUESTS = 600

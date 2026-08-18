@@ -25,6 +25,11 @@ filestorage/csvs/
 !.yarn/releases
 !.yarn/versions
 
+.env
+.**env**/**
+.npmrc
+.openai/
+
 # testing
 /coverage
 

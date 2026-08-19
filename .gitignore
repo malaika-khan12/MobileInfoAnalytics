@@ -1,20 +1,3 @@
-output*.txt
-temperoryTestingVersion/*
-redmi14.html
-
-# filestorage/mobiles/gsmarena.com/_request**.json
-# filestorage/mobiles/**gsm**/gsm**.json
-# filestorage/mobiles/**mobile**/**mobile**.json
-# filestorage/mobiles/**mega**/**mega**.json
-# filestorage/mobiles/**daraz**/**daraz**.json
-filestorage/csvs/
-filestorage/mobiles_organised/
-filestorage/mobiles/
-
-**cache**/
-
-**.zip
-
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
@@ -27,17 +10,16 @@ filestorage/mobiles/
 !.yarn/releases
 !.yarn/versions
 
+# my local files
+filestorage/prompts/
+**cache**/
+toDatabase.txt
+.openai/
+**.zip
 .env
 .*venv*/
 .*env*/
-.npmrc
-toDatabase.txt
-.openai/
-BUILD_INFO.json
-output.*
-package-lock.json
-package.json
-filestorage/prompts/
+
 # testing
 /coverage
 
@@ -68,3 +50,6 @@ next-env.d.ts
 /.sites-runtime/
 /outputs/
 /work/
+
+# local production control-plane execution state
+/filestorage/control_plane_jobs/

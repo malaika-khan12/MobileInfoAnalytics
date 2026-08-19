@@ -1,0 +1,68 @@
+MobileInfoAnalytics - Flask + Streamlit - Windows verification checklist
+=======================================================================
+
+Run these from:
+D:/Downloads/Repositories/MobileInfoAnalytics
+
+AUTOMATED CHECKS
+----------------
+
+python -m unittest discover -s frontend/tests -v
+node --check frontend/static/js/app.js
+python -m py_compile frontend/app.py frontend/streamlit_app.py backend/control_api.py backend/control_plane.py
+
+Expected:
+- All tests should report OK.
+- node --check should return silently with exit code 0.
+- py_compile should return silently with exit code 0.
+
+MAIN WEBSITE CHECK
+------------------
+
+Start:
+waitress-serve --listen=127.0.0.1:5000 frontend.app:app
+
+Then check:
+1. http://127.0.0.1:5000/ loads the site.
+2. http://127.0.0.1:5000/dashboard shows live KPI cards and charts.
+3. Dashboard charts are populated from Supabase, not placeholder values.
+4. Source coverage/completeness, brand mix, screen technology, technology
+   scatter, price ranges and discrepancy views render without console errors.
+5. http://127.0.0.1:5000/database can query only allowlisted live views.
+6. http://127.0.0.1:5000/admin shows the operator login.
+7. Log in using the exact MOBILE_ANALYTICS_ADMIN_TOKEN from .env.
+8. After login, Operations/job history and protected metadata become visible.
+9. Log out and confirm protected operational data is hidden again.
+
+STREAMLIT CHECK
+---------------
+
+Start in a second PowerShell window:
+python -m streamlit run frontend/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+
+Then check http://127.0.0.1:8501:
+1. Hero and KPI row load.
+2. Sidebar filters update the latest-product sample.
+3. Market overview tab renders source coverage and quality charts.
+4. Product technology tab renders brand/screen/release-year/adoption charts.
+5. Price intelligence tab renders returned live price ranges/spreads.
+6. Quality & freshness tab renders discrepancy/freshness analysis.
+7. Tables and product search return live database rows.
+8. Empty datasets are shown as explicit empty/error states; no fake values appear.
+
+LOCAL LOGIN TROUBLESHOOTING
+---------------------------
+
+If login succeeds but immediately appears logged out, check:
+MOBILE_ANALYTICS_SECURE_COOKIES=0
+
+If the app points at the wrong clone, check:
+MOBILE_ANALYTICS_REPO_ROOT=D:/Downloads/Repositories/MobileInfoAnalytics
+
+If Supabase analytics calls return a permission error, confirm the finalized
+analytics views are exposed to the Data API and that the service-role/secret
+permissions for those views are present. The included db/frontend_api_grants.sql
+is permission-only; use it only if those grants were not already applied.
+
+If a scraper is tested, start with a SMALL range and confirm that its resulting
+JSON is written into the expected filestorage/mobiles/<source>/ directory.

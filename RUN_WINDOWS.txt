@@ -1,0 +1,71 @@
+MobileInfoAnalytics - Flask + Streamlit - Windows run instructions
+=================================================================
+
+This package is an OVERLAY for your existing clone:
+D:/Downloads/Repositories/MobileInfoAnalytics
+
+1) Copy/extract this package over that clone.
+   Do not delete your existing backend scrapers, filestorage data, database SQL,
+   or ETL scripts.
+
+2) Fix the root .env before running.
+
+For LOCAL Windows development, these lines must look like this:
+
+FLASK_SECRET_KEY=<long-random-value>
+MOBILE_ANALYTICS_ADMIN_TOKEN=<different-long-random-value>
+MOBILE_ANALYTICS_SECURE_COOKIES=0
+MOBILE_ANALYTICS_REPO_ROOT=D:/Downloads/Repositories/MobileInfoAnalytics
+
+Keep your existing real values for:
+SUPABASE_URL
+SUPABASE_KEY
+SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+SUPABASE_JWKS_URL
+TOGETHER_API_KEY
+and your database connection variables.
+
+Important:
+- Do NOT point MOBILE_ANALYTICS_REPO_ROOT at MobileInfoAnalytics2 in this branch.
+- Use forward slashes in the Windows path as shown above.
+- MOBILE_ANALYTICS_SECURE_COOKIES must be 0 while using local http:// URLs.
+  Change it to 1 only when the site is actually behind HTTPS.
+- MOBILE_ANALYTICS_ADMIN_TOKEN is NOT a Supabase key. It is simply your own
+  long random operator password/token for the Admin/Operations login.
+- FLASK_SECRET_KEY should be a different random value.
+
+Generate each random value with PowerShell:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+Run that command twice and use two different outputs.
+
+3) Install dependencies from PowerShell at the repo root:
+
+python -m pip install -r requirements.txt
+python -m pip install -r frontend/requirements.txt
+python -m playwright install chromium
+
+4) Start the main Flask website:
+
+waitress-serve --listen=127.0.0.1:5000 frontend.app:app
+
+Open:
+http://127.0.0.1:5000/
+http://127.0.0.1:5000/dashboard
+
+The Dashboard page is now the redesigned D3 market-intelligence dashboard.
+The Admin/Operations page asks for MOBILE_ANALYTICS_ADMIN_TOKEN.
+
+5) Start the richer Streamlit analytics dashboard in a SECOND PowerShell window:
+
+cd D:/Downloads/Repositories/MobileInfoAnalytics
+python -m streamlit run frontend/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+
+Open:
+http://127.0.0.1:8501
+
+This Streamlit app reads live Supabase data. It does not use a CSV fixture or
+fallback dummy data.
+
+6) Stop a server with Ctrl+C in the PowerShell window that started it.

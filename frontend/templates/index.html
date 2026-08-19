@@ -3,13 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Governed mobile-device collection and market intelligence.">
+  <meta name="description" content="Production mobile-device collection, database operations, and market intelligence.">
   <title>Mobile Analytics</title>
   <link rel="icon" href="/assets/favicon.ico">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v=3">
-  <script src="https://cdn.jsdelivr.net/npm/d3@7" defer></script>
-  <script src="{{ url_for('static', filename='js/data.js') }}?v=3" defer></script>
-  <script src="{{ url_for('static', filename='js/app.js') }}?v=3" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v=5">
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js" defer></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}?v=5" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">Skip to content</a>
@@ -18,18 +17,18 @@
     <button class="mobile-menu icon-button" id="menuToggle" aria-label="Open navigation" aria-expanded="false">☰</button>
     <nav id="mainNav" aria-label="Primary navigation">
       <a href="/scrapers" data-route data-nav="scrapers">Scrapers</a>
-      <a href="/admin" data-route data-nav="admin">Admin panel</a>
+      <a href="/admin" data-route data-nav="admin">Operations</a>
       <a href="/database" data-route data-nav="database">Database view</a>
       <a href="/dashboard" data-route data-nav="dashboard">Dashboard</a>
-      <a href="/realtime" data-route data-nav="realtime"><span class="live-dot"></span>Real-time</a>
+      <a href="/realtime" data-route data-nav="realtime"><span class="live-dot"></span>Live status</a>
     </nav>
     <div class="top-actions">
       <button class="command-hint" id="commandOpen" aria-label="Open quick navigation">Search <kbd>⌘ K</kbd></button>
       <button class="icon-button" id="themeToggle" aria-label="Toggle colour theme">◐</button>
-      <span class="avatar" title="Signed in as Ali">AL</span>
+      <a class="avatar" href="/admin" data-route title="Operations console" aria-label="Open operations console">OP</a>
     </div>
   </header>
-  <main id="workspace" tabindex="-1"></main>
+  <main id="workspace" tabindex="-1"><div class="loading-row"><img src="/assets/loading.gif" alt="">Loading live system data…</div></main>
   <div id="toastRegion" class="toast-region" aria-live="polite"></div>
   <dialog id="commandDialog" class="command-dialog">
     <form method="dialog"><div class="dialog-head"><strong>Go to workspace</strong><button class="icon-button" aria-label="Close">×</button></div>

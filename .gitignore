@@ -43,3 +43,7 @@ next-env.d.ts
 
 # local production control-plane execution state
 /filestorage/control_plane_jobs/
+__pycache__/
+**cpython**
+*.pyc
+**/*cache*/**

@@ -33,6 +33,13 @@ class ControlApiSecurityTests(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
 
+    def test_control_api_root_explains_that_frontend_is_separate(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["service"], "MobileInfoAnalytics Control API")
+        self.assertEqual(payload["health"], "/api/health")
+
     def test_privileged_metadata_requires_operator_session(self):
         response = self.client.get("/api/data/rejects?limit=5")
         self.assertEqual(response.status_code, 401)

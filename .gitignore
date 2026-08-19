@@ -10,16 +10,6 @@
 !.yarn/releases
 !.yarn/versions
 
-# my local files
-filestorage/prompts/
-**cache**/
-toDatabase.txt
-.openai/
-**.zip
-.env
-.*venv*/
-.*env*/
-
 # testing
 /coverage
 

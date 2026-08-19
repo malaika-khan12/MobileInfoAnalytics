@@ -17,39 +17,53 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from dotenv import load_dotenv
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _read_env_file(path: Path) -> None:
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding="utf-8-sig").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+def _bootstrap_environment() -> None:
+    """Load repository environment without depending on the caller shell.
+
+    Windows users frequently start the frontend from PowerShell and the control
+    API from another terminal. Loading both the code-root and current-working-
+    directory .env files makes those entry points behave consistently. Inline
+    comments and quoted values are parsed by python-dotenv instead of a custom
+    splitter.
+    """
+    code_root = Path(__file__).resolve().parent.parent
+    candidates = [Path.cwd() / ".env", code_root / ".env"]
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
-            os.environ[key] = value
+        seen.add(candidate)
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
 
 
 def resolve_repo_root() -> Path:
-    configured = os.getenv("MOBILE_ANALYTICS_REPO_ROOT")
+    code_root = Path(__file__).resolve().parent.parent
+    configured = (os.getenv("MOBILE_ANALYTICS_REPO_ROOT") or "").strip()
     if configured:
-        return Path(configured).expanduser().resolve()
-    here = Path(__file__).resolve()
-    # backend/control_plane.py -> repository root
-    candidate = here.parent.parent
-    if (candidate / "filestorage").exists() or (candidate / "frontend").exists():
-        return candidate
+        configured_path = Path(configured).expanduser()
+        if configured_path.exists():
+            return configured_path.resolve()
+        # A stale WSL path in a Windows .env should not make the control plane
+        # unusable. Fall back to the repository that owns this backend and
+        # expose the mismatch through pipeline_status for the operator.
+    if (code_root / "filestorage").exists() or (code_root / "frontend").exists():
+        return code_root.resolve()
     return Path.cwd().resolve()
 
 
+_bootstrap_environment()
 REPO_ROOT = resolve_repo_root()
-_read_env_file(REPO_ROOT / ".env")
+if (REPO_ROOT / ".env").is_file():
+    load_dotenv(REPO_ROOT / ".env", override=False)
 
 
 class ControlPlaneError(RuntimeError):
@@ -265,17 +279,161 @@ def _average(values: Iterable[float]) -> float | None:
     return round(sum(values) / len(values), 2)
 
 
+def _safe_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _count_field(rows: list[dict[str, Any]], field: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        value = row.get(field)
+        if value in (None, ""):
+            label = "Unknown"
+        else:
+            label = str(value).strip() or "Unknown"
+        counts[label] = counts.get(label, 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
+    if limit is not None:
+        ordered = ordered[:limit]
+    return [{"label": label, "count": count} for label, count in ordered]
+
+
+def _os_family(value: Any) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if not text:
+        return "Unknown"
+    if "android" in lowered:
+        return "Android"
+    if "ios" in lowered:
+        return "iOS"
+    if "harmony" in lowered:
+        return "HarmonyOS"
+    if "windows" in lowered:
+        return "Windows"
+    if "kaios" in lowered:
+        return "KaiOS"
+    return text.split()[0][:24]
+
+
+def _median(values: list[float]) -> float | None:
+    values = sorted(values)
+    if not values:
+        return None
+    midpoint = len(values) // 2
+    if len(values) % 2:
+        return round(values[midpoint], 2)
+    return round((values[midpoint - 1] + values[midpoint]) / 2, 2)
+
+
 def dashboard_payload(client: SupabaseREST) -> dict[str, Any]:
-    sites, _ = client.get("analytics", "v_site_summary", params={"select": VIEW_REGISTRY["site_summary"]["select"], "order": "total_listings.desc"})
+    sites, _ = client.get(
+        "analytics",
+        "v_site_summary",
+        params={"select": VIEW_REGISTRY["site_summary"]["select"], "order": "total_listings.desc"},
+    )
     products_count = client.count("catalog", "products")
     listings_count = client.count("listings", "market_listings")
     companies_count = client.count("catalog", "companies")
     price_count = client.count("listings", "listing_prices")
-    quality_rows, _ = client.get("metadata", "data_quality", params={"select": "completeness_pct", "order": "scored_at.desc"}, privileged=True, range_start=0, range_end=999)
-    avg_quality = _average(float(row["completeness_pct"]) for row in quality_rows if row.get("completeness_pct") is not None)
-    recent_products, _ = client.get("analytics", "v_canonical_products", params={"select": VIEW_REGISTRY["products"]["select"], "order": "product_id.desc"}, range_start=0, range_end=9)
-    price_rows, _ = client.get("analytics", "v_price_comparison", params={"select": "product_id,company_name,mobile_name,currency_code,min_price,avg_price,max_price,price_spread,sources_count,total_listings", "order": "price_spread.desc.nullslast"}, range_start=0, range_end=9)
-    run_rows, _ = client.get("metadata", "scrape_runs", params={"select": VIEW_REGISTRY["scrape_runs"]["select"], "order": "started_at.desc"}, privileged=True, range_start=0, range_end=9)
+
+    quality_rows, _ = client.get(
+        "metadata",
+        "data_quality",
+        params={"select": "completeness_pct", "order": "scored_at.desc"},
+        privileged=True,
+        range_start=0,
+        range_end=999,
+    )
+    avg_quality = _average(
+        float(row["completeness_pct"])
+        for row in quality_rows
+        if row.get("completeness_pct") is not None
+    )
+
+    recent_products, _ = client.get(
+        "analytics",
+        "v_canonical_products",
+        params={"select": VIEW_REGISTRY["products"]["select"], "order": "product_id.desc"},
+        range_start=0,
+        range_end=14,
+    )
+    price_rows, _ = client.get(
+        "analytics",
+        "v_price_comparison",
+        params={
+            "select": "product_id,company_name,mobile_name,currency_code,min_price,avg_price,max_price,price_spread,sources_count,total_listings",
+            "order": "price_spread.desc.nullslast",
+        },
+        range_start=0,
+        range_end=29,
+    )
+    run_rows, _ = client.get(
+        "metadata",
+        "scrape_runs",
+        params={"select": VIEW_REGISTRY["scrape_runs"]["select"], "order": "started_at.desc"},
+        privileged=True,
+        range_start=0,
+        range_end=14,
+    )
+
+    # A bounded analytics sample keeps the dashboard responsive without adding
+    # new database objects to the user's finalized schema. Every derived value
+    # below reports its sample size so the UI never presents a sample as a full
+    # population statistic.
+    product_sample, _ = client.get(
+        "analytics",
+        "v_canonical_products",
+        params={
+            "select": "product_id,company_name,mobile_name,release_year,supports_5g,screen_technology,refresh_rate_hz,pixel_density_ppi,operating_system,capacity_mah,has_wireless_charging",
+            "order": "product_id.desc",
+        },
+        range_start=0,
+        range_end=499,
+    )
+
+    os_rows = [{"os_family": _os_family(row.get("operating_system"))} for row in product_sample]
+    years = [
+        {"release_year": str(int(float(row["release_year"]))) if _safe_number(row.get("release_year")) is not None else "Unknown"}
+        for row in product_sample
+    ]
+    battery_values = [number for row in product_sample if (number := _safe_number(row.get("capacity_mah"))) is not None and number > 0]
+    five_g_count = sum(1 for row in product_sample if bool(row.get("supports_5g")))
+    wireless_count = sum(1 for row in product_sample if bool(row.get("has_wireless_charging")))
+
+    discrepancy_rows, _ = client.get(
+        "analytics",
+        "v_spec_discrepancies",
+        params={
+            "select": "source_domain,battery_discrepancy,screen_discrepancy,refresh_discrepancy",
+            "order": "product_id.desc",
+        },
+        range_start=0,
+        range_end=499,
+    )
+    discrepancy_by_source: dict[str, dict[str, Any]] = {}
+    for row in discrepancy_rows:
+        source = str(row.get("source_domain") or "unknown")
+        bucket = discrepancy_by_source.setdefault(
+            source,
+            {"source_domain": source, "rows": 0, "battery": 0, "screen": 0, "refresh": 0},
+        )
+        bucket["rows"] += 1
+        bucket["battery"] += int(bool(row.get("battery_discrepancy")))
+        bucket["screen"] += int(bool(row.get("screen_discrepancy")))
+        bucket["refresh"] += int(bool(row.get("refresh_discrepancy")))
+    discrepancy_summary = sorted(discrepancy_by_source.values(), key=lambda row: (-int(row["rows"]), str(row["source_domain"])))
+    for row in discrepancy_summary:
+        denominator = max(1, int(row["rows"]))
+        row["battery_pct"] = round(100 * int(row["battery"]) / denominator, 2)
+        row["screen_pct"] = round(100 * int(row["screen"]) / denominator, 2)
+        row["refresh_pct"] = round(100 * int(row["refresh"]) / denominator, 2)
+
     return {
         "generated_at": utc_now(),
         "metrics": {
@@ -289,6 +447,24 @@ def dashboard_payload(client: SupabaseREST) -> dict[str, Any]:
         "recent_products": recent_products,
         "price_spreads": price_rows,
         "recent_runs": run_rows,
+        "product_insights": {
+            "sample_size": len(product_sample),
+            "company_counts": _count_field(product_sample, "company_name", limit=12),
+            "screen_counts": _count_field(product_sample, "screen_technology", limit=8),
+            "os_counts": _count_field(os_rows, "os_family", limit=8),
+            "release_year_counts": _count_field(years, "release_year", limit=12),
+            "five_g_count": five_g_count,
+            "five_g_pct": round((100 * five_g_count / len(product_sample)), 2) if product_sample else None,
+            "wireless_charging_count": wireless_count,
+            "wireless_charging_pct": round((100 * wireless_count / len(product_sample)), 2) if product_sample else None,
+            "battery_avg_mah": round(sum(battery_values) / len(battery_values), 2) if battery_values else None,
+            "battery_median_mah": _median(battery_values),
+            "scatter": product_sample[:160],
+        },
+        "discrepancy_insights": {
+            "sample_size": len(discrepancy_rows),
+            "by_source": discrepancy_summary,
+        },
     }
 
 
@@ -683,4 +859,17 @@ def pipeline_status(client: SupabaseREST | None = None) -> dict[str, Any]:
             db["error"] = str(exc)
             if isinstance(exc, SupabaseError):
                 db["detail"] = exc.detail
-    return {"repo_root": str(REPO_ROOT), "database": db, "scripts": scripts, "jobs": JOB_MANAGER.list(10)}
+    configured_root = (os.getenv("MOBILE_ANALYTICS_REPO_ROOT") or "").strip()
+    configured_exists = bool(configured_root and Path(configured_root).expanduser().exists())
+    root_warning = None
+    if configured_root and not configured_exists:
+        root_warning = "MOBILE_ANALYTICS_REPO_ROOT does not exist for this operating system; using the repository that contains backend/control_plane.py."
+    return {
+        "repo_root": str(REPO_ROOT),
+        "configured_repo_root": configured_root or None,
+        "configured_repo_root_exists": configured_exists if configured_root else None,
+        "repo_root_warning": root_warning,
+        "database": db,
+        "scripts": scripts,
+        "jobs": JOB_MANAGER.list(10),
+    }

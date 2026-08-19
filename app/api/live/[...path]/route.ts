@@ -3,7 +3,20 @@ import { NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 function controlBase(): string {
-  return (process.env.CONTROL_API_URL || "http://127.0.0.1:5050").replace(/\/$/, "");
+  let raw = (process.env.CONTROL_API_URL || "http://127.0.0.1:5050").trim();
+  raw = raw.replace(/^['"]|['"]$/g, "");
+  // Be forgiving of the common local .env typo `http://127.0.0.1:5050:`.
+  if (/^https?:\/\/[^/]+:\d+:$/.test(raw)) raw = raw.slice(0, -1);
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("CONTROL_API_URL is invalid. Use http://127.0.0.1:5050 for local Windows development.");
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error("CONTROL_API_URL must use http:// or https://.");
+  }
+  return parsed.href.replace(/\/$/, "");
 }
 
 function isCrossSiteWrite(request: NextRequest): boolean {
@@ -16,19 +29,18 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
     return NextResponse.json({ ok: false, error: "Cross-site write request rejected." }, { status: 403 });
   }
 
-  const { path } = await context.params;
-  const suffix = path.map(encodeURIComponent).join("/");
-  const upstream = new URL(`${controlBase()}/api/${suffix}`);
-  request.nextUrl.searchParams.forEach((value, key) => upstream.searchParams.append(key, value));
-
-  const headers = new Headers({ Accept: "application/json" });
-  const cookie = request.headers.get("cookie");
-  if (cookie) headers.set("Cookie", cookie);
-  if (request.method !== "GET" && request.method !== "HEAD") headers.set("Content-Type", "application/json");
-
-  const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
-
   try {
+    const { path } = await context.params;
+    const suffix = path.map(encodeURIComponent).join("/");
+    const upstream = new URL(`${controlBase()}/api/${suffix}`);
+    request.nextUrl.searchParams.forEach((value, key) => upstream.searchParams.append(key, value));
+
+    const headers = new Headers({ Accept: "application/json" });
+    const cookie = request.headers.get("cookie");
+    if (cookie) headers.set("Cookie", cookie);
+    if (request.method !== "GET" && request.method !== "HEAD") headers.set("Content-Type", "application/json");
+
+    const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.text();
     const response = await fetch(upstream, { method: request.method, headers, body, cache: "no-store" });
     const responseBody = await response.text();
     const outgoing = new Headers({

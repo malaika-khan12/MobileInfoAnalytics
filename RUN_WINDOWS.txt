@@ -1,0 +1,79 @@
+MobileInfoAnalytics - TypeScript/Next.js - Windows run instructions
+==================================================================
+
+This package is an OVERLAY for your TypeScript clone:
+D:/Downloads/Repositories/MobileInfoAnalytics2
+
+It is now native-Windows Next.js. Do NOT use WSL, bash, Vinext, Wrangler, or
+WRANGLER_LOG_PATH for normal development.
+
+1) Copy/extract this package over MobileInfoAnalytics2.
+
+2) Fix the root .env before running.
+
+For LOCAL Windows development, these lines must look like this:
+
+FLASK_SECRET_KEY=<long-random-value>
+MOBILE_ANALYTICS_ADMIN_TOKEN=<different-long-random-value>
+MOBILE_ANALYTICS_SECURE_COOKIES=0
+MOBILE_ANALYTICS_REPO_ROOT=D:/Downloads/Repositories/MobileInfoAnalytics2
+CONTROL_API_URL=http://127.0.0.1:5050
+
+Keep your existing real values for:
+SUPABASE_URL
+SUPABASE_KEY
+SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+SUPABASE_JWKS_URL
+TOGETHER_API_KEY
+and your database connection variables.
+
+Important fixes compared with the .env you showed:
+- CONTROL_API_URL must NOT end in an extra colon.
+- Do not use /mnt/d/... in this native-Windows branch.
+- Do not point this clone at MobileInfoAnalytics; use MobileInfoAnalytics2.
+- MOBILE_ANALYTICS_SECURE_COOKIES must be 0 for local http:// development.
+- MOBILE_ANALYTICS_ADMIN_TOKEN is your own random operator password/token; it
+  is not a Supabase key.
+
+Generate each local application secret with:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+Run that command twice and use different outputs for FLASK_SECRET_KEY and
+MOBILE_ANALYTICS_ADMIN_TOKEN.
+
+3) Install dependencies from PowerShell at the repo root:
+
+python -m pip install -r requirements.txt
+python -m pip install -r backend/requirements-control-api.txt
+python -m playwright install chromium
+npm ci
+
+4) Start the Python Control API in PowerShell window #1:
+
+python -m backend.control_api
+
+It now uses Waitress and listens on:
+http://127.0.0.1:5050
+
+Opening http://127.0.0.1:5050/ should return a small JSON service-status object.
+THIS IS NOT THE WEBSITE. Port 5050 is the private/local Control API used by the
+Next.js frontend.
+
+5) Start the TypeScript website in PowerShell window #2:
+
+cd D:/Downloads/Repositories/MobileInfoAnalytics2
+npm run dev
+
+Open:
+http://127.0.0.1:3000
+http://127.0.0.1:3000/dashboard
+
+6) Production-style local run, after verification:
+
+npm run build
+npm run start
+
+The production frontend also listens on http://127.0.0.1:3000 by default.
+
+7) Stop either server with Ctrl+C in its PowerShell window.

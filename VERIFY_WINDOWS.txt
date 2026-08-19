@@ -1,0 +1,73 @@
+MobileInfoAnalytics - TypeScript/Next.js - Windows verification checklist
+========================================================================
+
+Run these from:
+D:/Downloads/Repositories/MobileInfoAnalytics2
+
+AUTOMATED CHECKS
+----------------
+
+python -m unittest discover -s backend/tests -v
+python -m py_compile backend/control_api.py backend/control_plane.py
+npm run check
+
+npm run check performs, in order:
+1. ESLint
+2. TypeScript type checking
+3. Next.js production build
+4. Rendered-page smoke tests against the production Next.js server
+
+All four stages must succeed.
+
+CONTROL API CHECK
+-----------------
+
+In PowerShell window #1:
+python -m backend.control_api
+
+Check:
+1. http://127.0.0.1:5050/ returns JSON explaining that the Control API is up.
+2. http://127.0.0.1:5050/api/health returns a healthy JSON response.
+3. The root 5050 response is NOT expected to render the website.
+
+NEXT.JS WEBSITE CHECK
+---------------------
+
+In PowerShell window #2:
+npm run dev
+
+Check http://127.0.0.1:3000:
+1. Home page renders with no browser-console exception.
+2. /dashboard renders the redesigned market-intelligence dashboard.
+3. Dashboard source, brand, screen, technology, price and quality views contain
+   live Supabase data and explicit bounded-sample labels where applicable.
+4. /database returns only allowlisted database views.
+5. /admin shows operator login.
+6. Login with the exact MOBILE_ANALYTICS_ADMIN_TOKEN from .env.
+7. Protected job/metadata controls become visible only after login.
+8. /scrapers loads the real scraper controls.
+9. Test only a SMALL scraper range first and confirm output is written into the
+   expected filestorage/mobiles/<source>/ folder.
+
+COMMON WINDOWS FIXES
+--------------------
+
+If npm prints anything involving bash, WSL, WRANGLER_LOG_PATH, Vinext or
+"node: not found", you are still running old package files. Re-extract this
+package and confirm package.json contains:
+
+"dev": "next dev -H 127.0.0.1 -p 3000"
+
+If the frontend cannot reach the Control API, confirm exactly:
+CONTROL_API_URL=http://127.0.0.1:5050
+
+If admin login does not persist locally, confirm:
+MOBILE_ANALYTICS_SECURE_COOKIES=0
+
+If backend jobs execute against the wrong clone, confirm:
+MOBILE_ANALYTICS_REPO_ROOT=D:/Downloads/Repositories/MobileInfoAnalytics2
+
+If Supabase analytics calls return a permission error, verify the finalized
+analytics schemas/views are exposed to the Data API and their service-role
+permissions are present. The included db/frontend_api_grants.sql is
+permission-only; use it only if those grants were not already applied.

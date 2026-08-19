@@ -5,7 +5,7 @@ import os
 import secrets
 from typing import Any
 
-from flask import Blueprint, Flask, jsonify, request, session
+from flask import Blueprint, Flask, current_app, jsonify, request, session
 
 from .control_plane import (
     ControlPlaneError,
@@ -59,6 +59,7 @@ def create_control_blueprint(name: str = "control_api") -> Blueprint:
         status = pipeline_status(db)
         if not _authorized():
             status.pop("repo_root", None)
+            status.pop("configured_repo_root", None)
             status.pop("jobs", None)
             status["scripts"] = {name: {"exists": item["exists"]} for name, item in status["scripts"].items()}
             database = status.get("database")
@@ -66,6 +67,17 @@ def create_control_blueprint(name: str = "control_api") -> Blueprint:
                 database.pop("detail", None)
                 if database.get("error"):
                     database["error"] = "Database health check failed."
+        status["session_cookie_secure"] = bool(current_app.config.get("SESSION_COOKIE_SECURE"))
+        warnings: list[str] = []
+        admin_token = _configured_admin_token()
+        if admin_token and len(admin_token) < 32:
+            warnings.append("MOBILE_ANALYTICS_ADMIN_TOKEN is short; use a generated random value of at least 32 characters.")
+        session_secret = os.getenv("FLASK_SECRET_KEY") or os.getenv("MOBILE_ANALYTICS_SESSION_SECRET") or ""
+        if session_secret and len(session_secret) < 32:
+            warnings.append("FLASK_SECRET_KEY/MOBILE_ANALYTICS_SESSION_SECRET is short; use a generated random value of at least 32 characters.")
+        if status["session_cookie_secure"] and not request.is_secure and request.host.split(":", 1)[0] in {"127.0.0.1", "localhost"}:
+            warnings.append("Secure cookies are enabled on local HTTP; operator login will not persist until MOBILE_ANALYTICS_SECURE_COOKIES=0 or HTTPS is used.")
+        status["security_warnings"] = warnings
         return jsonify({"ok": True, **status})
 
     @bp.get("/api/dashboard")
@@ -171,8 +183,26 @@ def create_app() -> Flask:
         MAX_CONTENT_LENGTH=256 * 1024,
     )
     app.register_blueprint(create_control_blueprint())
+
+    @app.get("/")
+    def service_root():
+        return jsonify({
+            "ok": True,
+            "service": "MobileInfoAnalytics Control API",
+            "message": "The control API is running. Open the TypeScript frontend separately (normally http://127.0.0.1:3000).",
+            "health": "/api/health",
+            "auth_status": "/api/auth/status",
+        })
+
     return app
 
 
 if __name__ == "__main__":
-    create_app().run(host=os.getenv("CONTROL_API_HOST", "127.0.0.1"), port=int(os.getenv("CONTROL_API_PORT", "5050")), debug=False)
+    from waitress import serve
+
+    serve(
+        create_app(),
+        host=os.getenv("CONTROL_API_HOST", "127.0.0.1"),
+        port=int(os.getenv("CONTROL_API_PORT", "5050")),
+        threads=max(4, int(os.getenv("CONTROL_API_THREADS", "8"))),
+    )

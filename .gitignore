@@ -1,13 +1,15 @@
-outputs.txt
+output*.txt
 temperoryTestingVersion/*
 redmi14.html
 
-filestorage/mobiles/gsmarena.com/_request**.json
-filestorage/mobiles/**gsm**/gsm**.json
-filestorage/mobiles/**mobile**/**mobile**.json
-filestorage/mobiles/**mega**/**mega**.json
-filestorage/mobiles/**daraz**/**daraz**.json
+# filestorage/mobiles/gsmarena.com/_request**.json
+# filestorage/mobiles/**gsm**/gsm**.json
+# filestorage/mobiles/**mobile**/**mobile**.json
+# filestorage/mobiles/**mega**/**mega**.json
+# filestorage/mobiles/**daraz**/**daraz**.json
 filestorage/csvs/
+filestorage/mobiles_organised/
+filestorage/mobiles/
 
 **cache**/
 
@@ -26,10 +28,16 @@ filestorage/csvs/
 !.yarn/versions
 
 .env
-.**env**/**
+.*venv*/
+.*env*/
 .npmrc
+toDatabase.txt
 .openai/
-
+BUILD_INFO.json
+output.*
+package-lock.json
+package.json
+filestorage/prompts/
 # testing
 /coverage
 

@@ -1,0 +1,89 @@
+// Exact key layout supplied for the MobileInfoAnalytics v2 output.
+{
+  "CompanyName": "Xiaomi",
+  "MobileName": "Redmi Note 14 4G",
+  "URL": "https://www.gsmarena.com/xiaomi_redmi_note_14_4g_(global)-13616.php",
+  "Network": {
+    "2G": 1,
+    "3G": 1,
+    "4G": 1,
+    "5G": 0,
+  },
+  "Announced": "2025, January 10",
+  "Status": "Available. Released 2025, January 15",
+  "Year": 2025,
+  "Month": "JAN",
+  "Day": 10,
+  "Body": {
+    "Dimensions": {
+      "DimensionA": 163.3,
+      "DimensionB": 76.6,
+      "DimensionC": 8.2
+    },
+    "Weight": 196.5,
+    "Build": "Glass front, plastic back, aluminum frame",
+    "Normal-SIM": 0,
+    "Nano-SIM": 1,
+    "E-SIM": 0,
+    "Resistance-Standard": "IP54",
+    "Resistance-Water": 0,
+    "Resistance-Dust": 1,
+  },
+  "Display": {
+    "Screen": "AMOLED",
+    "Refresh-Rate": 120,
+    "Brightness": 1800,
+    "ResolutionA": 1080,
+    "ResolutionB": 2400,
+    "Ratio": "20:9",
+    "Pixel-Density": 395,
+    "Protection": "Corning Gorilla Glass 5, Mohs level 5"
+  },
+  "Platform": {
+    "OS": "Android 14",
+    "Chipset": "Mediatek Helio G99 Ultra",
+    "Chipset-Size": 6,
+    "CPU": "Octa-core",
+    "GPU": "Mali-G57 MC2"
+  },
+  "Memory": {
+    "Card slot": "microSDXC",
+    "Types": [[128, 6], [128, 8], [256, 6], [256, 8]],
+    "Technology": "UFS 2.2"
+  },
+  "Main Camera": {
+    "Specifications": ["108 MP"],
+    "Features": "LED flash, HDR, panorama",
+    "Video": ["1080p@30fps", "1080p@60fps"]
+  },
+  "Selfie Camera": {
+    "Specifications": ["20 MP"],
+    "Video": ["1080p@30fps"]
+  },
+  "Sound": {
+    "Loudspeaker": 1,
+    "3.5mm jack": 1,
+  },
+  "Features": {
+    "WLAN": "Wi-Fi 802.11 a/b/g/n/ac",
+    "Bluetooth": "5.3",
+    "Positioning": "GPS, GLONASS, BDS, GALILEO",
+    "NFC": 1,
+    "Infrared port": 1,
+    "Radio": 0,
+    "USB-A": 0,
+    "USB-B": 0,
+    "Micro-USB": 0,
+    "USB-C": 1,
+    "BackFingerPrint": 0,
+    "SideFingerPrint": 0,
+    "InDisplayFingerPrint": 1,
+  },
+  "Battery": {
+    "Capacity": 5500,
+    "WirelessCharging": 0,
+    "Charging": ["33W wired"]
+  },
+  "Colors": ["Midnight Black", "Mist Purple", "Ocean Blue", "Lime Green"],
+  "Price": [172.99, 206.80, 129.99, 48000]
+}

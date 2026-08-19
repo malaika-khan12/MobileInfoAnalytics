@@ -1,0 +1,17 @@
+./backend/navigation_to_page/GSMARENA_CRAWLING.md
+./backend/navigation_to_page/README.md
+./backend/scrapers/README.md
+./db/database_architecture_v2.md
+./db/README_FUNCTIONS_SUPABASE.md
+./db/README_SCHEMA_SUPABASE.md
+./filestorage/DATA_PIPELINE.md
+./filestorage/README.md
+./frontend/AIMS.md
+./frontend/BACKEND_CONTRACTS.md
+./frontend/css/README.md
+./frontend/HANDOFF_PROMPT.md
+./frontend/html/README.md
+./frontend/js/README.md
+./frontend/README.md
+./README.md
+
